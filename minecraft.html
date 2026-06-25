@@ -1144,19 +1144,7 @@ window.loop = function(t) {
   requestAnimationFrame(window.loop);
 };
 
-
-
-
-
-
-
-
-
-
-
-
-
-// 1. ՍԱՀՄԱՆՈՒՄ ԵՆՔ CRAFTING TABLE-Ի ID-Ն ԵՎ ԳՈՒՅՆԵՐԸ
+// 1. ՍԱՀՄԱՆՈՒՄ ԵՆՔ ԲԼՈԿԸ
 window.CRAFTING_TABLE = 16;
 BLOCK_NAME[window.CRAFTING_TABLE] = 'Crafting Table';
 C_TOP[window.CRAFTING_TABLE] = '#b0885a';  
@@ -1164,14 +1152,14 @@ C_DARK[window.CRAFTING_TABLE] = '#856643';
 BLOCK_HARD[window.CRAFTING_TABLE] = 1.0;   
 BLOCK_DROP[window.CRAFTING_TABLE] = window.CRAFTING_TABLE;
 
-// 2. CRAFTING ՀԱՄԱԿԱՐԳԻ ՓՈՓՈԽԱԿԱՆՆԵՐԸ
+// 2. ՄԵՆՅՈՒԻ ՓՈՓՈԽԱԿԱՆՆԵՐԸ
 window.showCraftingMenu = false;
 window.craftingRecipes = [
-  { resultId: PLANKS, resultCount: 4, needId: WOOD, needCount: 1, name: '4x Planks (Needs 1 Wood)' },
-  { resultId: window.CRAFTING_TABLE, resultCount: 1, needId: PLANKS, needCount: 4, name: '1x Crafting Table (Needs 4 Planks)' }
+  { resultId: PLANKS, resultCount: 4, needId: WOOD, needCount: 1, name: '4x Planks (Cost: 1 Wood)' },
+  { resultId: window.CRAFTING_TABLE, resultCount: 1, needId: PLANKS, needCount: 4, name: '1x Crafting Table (Cost: 4 Planks)' }
 ];
 
-// 3. ԹԱՐՄԱՑՆՈՒՄ ԵՆՔ DRAWBLOCK-Ը (CRAFTING TABLE-Ի ՏԵՍՔԸ)
+// 3. ՆԿԱՐՈՒՄ ԵՆՔ ԲԼՈԿԸ (DRAWBLOCK)
 const originalDrawBlock = drawBlock;
 drawBlock = function(bx, by, type) {
   if (type === window.CRAFTING_TABLE) {
@@ -1184,85 +1172,77 @@ drawBlock = function(bx, by, type) {
     ctx.fillStyle = C_DARK[type]; ctx.fillRect(sx, sy + TILE - 5, TILE, 5); ctx.fillRect(sx + TILE - 5, sy, 5, TILE - 5);
     ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(sx, sy, TILE, 4); ctx.fillRect(sx, sy, 4, TILE);
 
-    // Խաչաձև գծեր վերևի մասում
+    // Grid lines վերևի մասում
     ctx.fillStyle = '#5c4037';
     ctx.fillRect(sx + 4, sy + 4, TILE - 8, 2); ctx.fillRect(sx + 4, sy + 12, TILE - 8, 2);
     ctx.fillRect(sx + 10, sy + 4, 2, TILE - 8); ctx.fillRect(sx + 20, sy + 4, 2, TILE - 8);
-    // Գործիքների նշաններ կողքերից
-    ctx.fillStyle = '#4a3826'; ctx.fillRect(sx + 4, sy + 18, 5, 8); ctx.fillRect(sx + TILE - 9, sy + 18, 5, 6);
     
-    ctx.strokeStyle = 'rgba(0,0,0,0.2)'; ctx.lineWidth = 0.5; ctx.strokeRect(sx + .5, sy + .5, TILE - 1, TILE - 1);
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)'; ctx.strokeRect(sx + .5, sy + .5, TILE - 1, TILE - 1);
     ctx.restore();
   } else {
     originalDrawBlock(bx, by, type);
   }
 };
 
-// 4. ՄԿՆԻԿԻ ՍԵՂՄՈՒՄՆԵՐԻ ԿԱՌԱՎԱՐՈՒՄ (Անվտանգ աջ և ձախ քլիքեր)
-window.addEventListener('mousedown', (e) => {
-  if (typeof gameState !== 'undefined' && gameState === 'playing') {
-    // Ճշգրիտ հաշվարկում ենք, թե որ բլոկի վրա է մկնիկը ( world[by][bx] )
-    const targetX = Math.floor((mx + cam.x) / TILE);
-    const targetY = Math.floor((my + cam.y) / TILE);
-    
-    if (targetX >= 0 && targetX < WORLD_W && targetY >= 0 && targetY < WORLD_H) {
-      const clickedBlock = world[targetY][targetX];
-
-      // ԱՋ ՔԼԻՔ՝ CRAFTING TABLE-Ի ՎՐԱ (Մենյուն բացել/փակելու համար)
-      if (e.button === 2 && clickedBlock === window.CRAFTING_TABLE) {
-        if (typeof inReach === 'function' && inReach(targetX, targetY)) {
-          e.preventDefault();
-          window.showCraftingMenu = !window.showCraftingMenu;
-          rmb = false; // Կանխում ենք հետևի ֆոնին բլոկ դնելը
-          return;
-        }
-      }
+// 4. ԱՄԵՆԱԿԱՐԵՎՈՐԸ՝ ՓՈԽՈՒՄ ԵՆՔ ԽԱՂԻ ԲՆԱԿԱՆ ՏԵՂԱԴՐՄԱՆ ՖՈՒՆԿՑԻԱՆ
+updatePlacing = function() {
+  // Եթե մենյուն բաց է, կանխում ենք հետևում բլոկ դնելը
+  if (window.showCraftingMenu) {
+    if (rmb && placeCd === 0) {
+      window.showCraftingMenu = false; // Աջ քլիքով փակում ենք
+      placeCd = 15;
     }
-
-    // ՁԱԽ ՔԼԻՔ՝ ԵՐԲ ՄԵՆՅՈՒՆ ԲԱՑ Է (Իրեր սարքելու համար)
-    if (window.showCraftingMenu && e.button === 0) {
+    
+    // Ձախ քլիքով կրաֆտ ենք անում
+    if (lmb && placeCd === 0) {
       let menuW = 300;
       let menuX = W / 2 - menuW / 2;
-      let menuY = H / 2 - 80;
+      let menuY = H / 2 - 60;
 
       for (let i = 0; i < window.craftingRecipes.length; i++) {
         let btnY = menuY + 40 + i * 35;
-        // Ստուգում ենք՝ արդյոք քլիքը ռեցեպտի կոճակի ներսում է
+        
         if (mx >= menuX + 10 && mx <= menuX + menuW - 10 && my >= btnY && my <= btnY + 28) {
-          e.preventDefault();
-          lmb = false; // Կանխում ենք հետևի բլոկները քանդելը
-          
+          placeCd = 15; // Քլիքի քուլդաուն
           let recipe = window.craftingRecipes[i];
-          // Փնտրում ենք անհրաժեշտ նյութը hotbar-ում
           let foundSlot = hotbar.find(s => s.id === recipe.needId && s.n >= recipe.needCount);
           
           if (foundSlot) {
-            // Վերցնում ենք պահանջվող իրը
             foundSlot.n -= recipe.needCount;
-            if (foundSlot.n <= 0) { foundSlot.id = 0; foundSlot.n = 0; }
+            if (foundSlot.n <= 0) { foundSlot.id = AIR; foundSlot.n = 0; }
             
-            // Ավելացնում ենք պատրաստված նոր իրը hotbar-ում
+            // Ավելացնում ենք ստացված իրը
             let added = false;
             for (let s of hotbar) {
-              if (s.id === recipe.resultId && s.n < 99) { s.n += recipe.resultCount; added = true; break; }
+              if (s.id === recipe.resultId && s.n < 64) { s.n += recipe.resultCount; added = true; break; }
             }
             if (!added) {
               for (let s of hotbar) {
-                if (!s.id) { s.id = recipe.resultId; s.n = recipe.resultCount; added = true; break; }
+                if (s.id === AIR || !s.id) { s.id = recipe.resultId; s.n = recipe.resultCount; added = true; break; }
               }
             }
-            if (typeof playBreak === 'function') playBreak(); // Կրաֆտի ձայնային էֆեկտ
+            if (typeof playBreak === 'function') playBreak(); // ձայնային էֆեկտ
           }
-          return;
+          break;
         }
       }
     }
+    return;
   }
-});
 
-// 5. ՓՈԽՈՒՄ ԵՆՔ ԲԼՈԿ ԴՆԵԼՈՒ ՖՈՒՆԿՑԻԱՆ, ՈՐՊԵՍԶԻ ՄԵՆՅՈՒԻ ԺԱՄԱՆԱԿ ԽԱՂԸ ՉԽԱԹԱՐՎԻ
-updatePlacing = function() {
-  if (window.showCraftingMenu) return; // Եթե մենյուն բաց է, բլոկ չի դրվում
+  // Եթե մենյուն բաց չէ, ստուգում ենք՝ արդյոք աջ քլիք ենք անում Crafting Table-ի վրա
+  if (rmb && placeCd === 0) {
+    const {bx, by} = targetBlock();
+    if (inReach(bx, by) && bx >= 0 && bx < WORLD_W && by >= 0 && by < WORLD_H) {
+      if (world[by][bx] === window.CRAFTING_TABLE) {
+        window.showCraftingMenu = true; // ԲԱՑՈՒՄ ԵՆՔ ԷԿՐԱՆԸ
+        placeCd = 15;
+        return;
+      }
+    }
+  }
+
+  // Խաղի օրիգինալ բլոկ դնելու կոդը
   if (!rmb || placeCd > 0) return;
   const {bx, by} = targetBlock();
   if (!inReach(bx, by) || bx < 0 || bx >= WORLD_W || by < 0 || by >= WORLD_H) return;
@@ -1273,12 +1253,10 @@ updatePlacing = function() {
   const s = hotbar[selSlot];
   if (!s.id) return;
   world[by][bx] = s.id;
-  s.n--;
-  if (s.n <= 0) { s.id = 0; s.n = 0; }
   placeCd = 10;
 };
 
-// 6. ՆԿԱՐՈՒՄ ԵՆՔ CRAFTING ՄԵՆՅՈՒՆ ԷԿՐԱՆԻՆ (DRAW_HUD)
+// 5. ՆԿԱՐՈՒՄ ԵՆՔ ՄԵՆՅՈՒԻ ՏԵՔՍՏԵՐԸ (DRAWHUD)
 const originalDrawHUD = drawHUD;
 drawHUD = function() {
   originalDrawHUD();
@@ -1288,36 +1266,154 @@ drawHUD = function() {
     let menuX = W / 2 - menuW / 2;
     let menuY = H / 2 - menuH / 2 - 20;
 
-    // Մենյուի ֆոնը
-    ctx.fillStyle = 'rgba(25院, 30, 30, 0.95)';
     ctx.fillStyle = '#2c2c2c'; ctx.fillRect(menuX, menuY, menuW, menuH);
     ctx.strokeStyle = '#cf9a5a'; ctx.lineWidth = 3; ctx.strokeRect(menuX, menuY, menuW, menuH);
 
-    // Վերնագիր
     ctx.fillStyle = '#fff'; ctx.font = 'bold 14px monospace'; ctx.textAlign = 'center';
     ctx.fillText('CRAFTING TABLE', W / 2, menuY + 22);
 
-    // Ռեցեպտների ցուցադրում
     for (let i = 0; i < window.craftingRecipes.length; i++) {
       let recipe = window.craftingRecipes[i];
       let btnY = menuY + 40 + i * 35;
 
-      // Hover էֆեկտ՝ երբ մկնիկը կոճակի վրա է
       let isHover = (mx >= menuX + 10 && mx <= menuX + menuW - 10 && my >= btnY && my <= btnY + 28);
       ctx.fillStyle = isHover ? '#555' : '#3a3a3a';
       ctx.fillRect(menuX + 10, btnY, menuW - 20, 28);
-      ctx.strokeStyle = '#555'; ctx.strokeRect(menuX + 10, btnY, menuW - 20, 28);
+      ctx.strokeStyle = '#666'; ctx.strokeRect(menuX + 10, btnY, menuW - 20, 28);
 
       ctx.fillStyle = '#eee'; ctx.font = '11px monospace'; ctx.textAlign = 'left';
       ctx.fillText(recipe.name, menuX + 20, btnY + 18);
     }
     
     ctx.fillStyle = '#aaa'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
-    ctx.fillText('(Right Click Crafting Table again to close)', W / 2, menuY + menuH - 10);
+    ctx.fillText('(Right Click anywhere to close)', W / 2, menuY + menuH - 10);
   }
 };
 
-// 7. ՏԱԼԻՍ ԵՆՔ ՔԵԶ CRAFTING TABLE (Ավելացնում ենք 9-րդ սլոտում)
+// 6. ՏԱԼԻՍ ԵՆՔ ՔԵԶ ՓԱՅՏ ԵՎ CRAFTING TABLE ՀԵՆՑ ՍԿԶԲԻՑ
+hotbar[3] = { id: WOOD, n: 64 };
 hotbar[8] = { id: window.CRAFTING_TABLE, n: 10 };
-selSlot = 8; // Ավտոմատ ձեռքդ է տալիս Crafting Table-ը
+selSlot = 8;
+
+// ══════════════════════════════════════════════════════
+// HP / LIFE SYSTEM
+// ══════════════════════════════════════════════════════
+P.hp    = 20;
+P.maxHp = 20;
+window.hpRegen  = 0;
+window.dmgFlash = 0;
+window.deathMsg = 0;
+let _airHighestY = null;
+
+function takeDamage(amount) {
+  if (amount <= 0 || window.deathMsg > 80) return;
+  P.hp = Math.max(0, P.hp - Math.floor(amount));
+  window.dmgFlash = 20;
+  window.hpRegen  = 0;
+  if (P.hp <= 0) {
+    window.deathMsg = 150;
+    setTimeout(() => { P.hp = P.maxHp; spawnPlayer(); }, 1500);
+  }
+}
+
+// Fall damage + regen
+const _hpPhysics = updatePhysics;
+updatePhysics = function() {
+  if (window.deathMsg > 100) return;
+  const wasOnGround = P.onGround;
+  _hpPhysics();
+
+  if (!P.onGround) {
+    if (_airHighestY === null || P.y < _airHighestY) _airHighestY = P.y;
+  }
+  if (!wasOnGround && P.onGround && _airHighestY !== null) {
+    const fell = (P.y - _airHighestY) / TILE;
+    if (fell > 3.5) takeDamage(Math.ceil((fell - 3.5) * 2));
+    _airHighestY = null;
+  }
+  if (P.onGround) _airHighestY = null;
+
+  // Void instant kill
+  if (P.y > WORLD_H * TILE + 40) takeDamage(P.hp);
+
+  // Regen: +1 HP every ~5 s
+  window.hpRegen++;
+  if (window.hpRegen > 300 && P.hp > 0 && P.hp < P.maxHp) {
+    P.hp++;
+    window.hpRegen = 0;
+  }
+};
+
+// Pixel-art heart (9×8 grid)
+function drawPixelHeart(ctx, x, y, sz, type) {
+  const MAP = [
+    [0,1,1,0,0,0,1,1,0],
+    [1,2,1,1,0,1,1,3,1],
+    [1,1,1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1,1,1],
+    [0,1,1,1,1,1,1,1,0],
+    [0,0,1,1,1,1,1,0,0],
+    [0,0,0,1,1,1,0,0,0],
+    [0,0,0,0,1,0,0,0,0],
+  ];
+  const COLS = {
+    full:  ['#ff3333','#ff7070','#aa1111'],
+    half:  ['#ff3333','#ff7070','#aa1111'],
+    empty: ['#3d0000','#550000','#200000'],
+  };
+  const p = sz / 9;
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 9; c++) {
+      const v = MAP[r][c];
+      if (!v) continue;
+      const pal = (type === 'half' && c >= 5) ? COLS.empty : COLS[type];
+      ctx.fillStyle = v === 2 ? pal[1] : (v === 3 ? pal[2] : pal[0]);
+      ctx.fillRect(x + c * p, y + r * p, p + 0.5, p + 0.5);
+    }
+  }
+}
+
+// HUD override — draws hearts above hotbar
+const _hpHUD = drawHUD;
+drawHUD = function() {
+  _hpHUD();
+
+  const SZ = 18, GAP = 2, N = P.maxHp / 2;
+  const tot = N * (SZ + GAP) - GAP;
+  const hx  = (W - tot) / 2;
+  const hy  = H - 44 - 8 - SZ - 8;
+
+  for (let i = 0; i < N; i++) {
+    const full = P.hp >= (i + 1) * 2;
+    const half = !full && P.hp > i * 2;
+    drawPixelHeart(ctx, hx + i * (SZ + GAP), hy, SZ,
+                   full ? 'full' : (half ? 'half' : 'empty'));
+  }
+
+  // Red damage flash
+  if (window.dmgFlash > 0) {
+    ctx.fillStyle = `rgba(200,0,0,${(window.dmgFlash / 20) * 0.4})`;
+    ctx.fillRect(0, 0, W, H);
+    window.dmgFlash--;
+  }
+
+  // "YOU DIED" overlay
+  if (window.deathMsg > 0) {
+    const a = Math.min(1, window.deathMsg / 40);
+    ctx.fillStyle = `rgba(0,0,0,${a * 0.65})`;
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 30;
+    ctx.fillStyle = `rgba(255,50,50,${a})`;
+    ctx.font = 'bold 42px monospace';
+    ctx.fillText('YOU DIED', W / 2, H / 2 - 14);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = `rgba(200,200,200,${a * 0.75})`;
+    ctx.font = '13px monospace';
+    ctx.fillText('Respawning...', W / 2, H / 2 + 18);
+    ctx.textAlign = 'left';
+    window.deathMsg--;
+  }
+};
+
 </script>

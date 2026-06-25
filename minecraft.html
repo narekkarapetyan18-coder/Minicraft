@@ -1296,6 +1296,137 @@ hotbar[8] = { id: window.CRAFTING_TABLE, n: 10 };
 selSlot = 8;
 
 // ══════════════════════════════════════════════════════
+// HUNGER SYSTEM
+// ══════════════════════════════════════════════════════
+const APPLE = 17;
+BLOCK_NAME[APPLE] = 'Apple';
+C_TOP[APPLE]  = '#ee4444';
+C_DARK[APPLE] = '#bb2222';
+BLOCK_HARD[APPLE] = Infinity;   // can't be mined as block
+BLOCK_DROP[APPLE] = APPLE;
+BLOCK_DROP[LEAVES] = APPLE;     // leaves now drop apples
+
+P.hunger    = 20;
+P.maxHunger = 20;
+window.hungerTick    = 0;
+window.hungerDmgTick = 0;
+window.eatCd         = 0;
+window.eatAnim       = 0;
+
+// Give 8 starting apples in the first free slot
+(function() {
+  for (const s of hotbar) { if (!s.id || s.id === 0) { s.id = APPLE; s.n = 8; return; } }
+})();
+
+function eatFood() {
+  const s = hotbar[selSlot];
+  if (!s || s.id !== APPLE || s.n <= 0 || window.eatCd > 0) return;
+  P.hunger = Math.min(P.maxHunger, P.hunger + 6);
+  s.n--;
+  if (s.n <= 0) { s.id = 0; s.n = 0; }
+  window.eatCd  = 25;
+  window.eatAnim = 25;
+}
+
+// F key = eat
+window.addEventListener('keydown', e => {
+  if ((e.key === 'f' || e.key === 'F') && gameState === 'playing') {
+    eatFood(); e.preventDefault();
+  }
+});
+
+// Right-click with apple = eat instead of place
+const _hungerPlacing = updatePlacing;
+updatePlacing = function() {
+  if (rmb && placeCd === 0 && hotbar[selSlot].id === APPLE) { eatFood(); return; }
+  _hungerPlacing();
+};
+
+// Hunger ticks + starvation damage
+const _hungerPhysics = updatePhysics;
+updatePhysics = function() {
+  _hungerPhysics();
+  if (window.eatCd > 0) window.eatCd--;
+  if (window.deathMsg > 100) return;
+
+  window.hungerTick++;
+  if (window.hungerTick > 400) {
+    window.hungerTick = 0;
+    if (P.hunger > 0) P.hunger--;
+  }
+
+  if (P.hunger === 0) {
+    window.hungerDmgTick++;
+    if (window.hungerDmgTick > 240) {
+      window.hungerDmgTick = 0;
+      if (typeof takeDamage === 'function') takeDamage(1);
+    }
+  } else {
+    window.hungerDmgTick = 0;
+  }
+};
+
+// Pixel-art drumstick (9 cols × 8 rows)
+function drawDrumstick(ctx, x, y, sz, type) {
+  const MAP = [
+    [0,0,1,1,1,1,0,0,0],
+    [0,1,1,1,1,1,1,0,0],
+    [0,1,1,1,1,1,1,0,0],
+    [0,0,1,1,1,1,0,0,0],
+    [0,0,0,1,1,0,0,0,0],
+    [0,0,0,1,1,0,0,0,0],
+    [0,0,1,1,1,1,0,0,0],
+    [0,0,1,0,0,1,0,0,0],
+  ];
+  const C = {
+    full:  ['#d4873c','#e8aa60','#9a5818'],
+    empty: ['#3a2010','#4e3018','#201008'],
+  };
+  const p = sz / 9;
+  for (let r = 0; r < 8; r++) {
+    for (let col = 0; col < 9; col++) {
+      if (!MAP[r][col]) continue;
+      const pal = (type === 'half' && col >= 5) ? C.empty : C[type] || C.empty;
+      const shade = r < 2 ? pal[1] : (col <= 1 || col >= 6) ? pal[2] : pal[0];
+      ctx.fillStyle = shade;
+      ctx.fillRect(x + col * p, y + r * p, p + 0.5, p + 0.5);
+    }
+  }
+}
+
+// HUD override: drumstick row above hearts
+const _hungerHUD = drawHUD;
+drawHUD = function() {
+  _hungerHUD();
+
+  const SZ = 18, GAP = 2, N = P.maxHunger / 2;
+  const tot = N * (SZ + GAP) - GAP;
+  const dx  = (W - tot) / 2;
+  const dy  = H - 44 - 8 - SZ - 8 - SZ - 5;   // row above hearts
+
+  for (let i = 0; i < N; i++) {
+    const full = P.hunger >= (i + 1) * 2;
+    const half = !full && P.hunger > i * 2;
+    drawDrumstick(ctx, dx + i * (SZ + GAP), dy, SZ,
+                  full ? 'full' : (half ? 'half' : 'empty'));
+  }
+
+  // Golden glow when eating
+  if (window.eatAnim > 0) {
+    ctx.fillStyle = `rgba(255,200,50,${(window.eatAnim / 25) * 0.18})`;
+    ctx.fillRect(0, 0, W, H);
+    window.eatAnim--;
+  }
+
+  // Orange pulse warning when starving (hunger < 4)
+  if (P.hunger < 4 && P.hunger > 0) {
+    const f = (Math.sin(Date.now() * 0.005) * 0.5 + 0.5) * 0.12;
+    ctx.fillStyle = `rgba(255,100,0,${f})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+};
+
+// ══════════════════════════════════════════════════════
 // HP / LIFE SYSTEM
 // ══════════════════════════════════════════════════════
 P.hp    = 20;
@@ -1413,6 +1544,87 @@ drawHUD = function() {
     ctx.fillText('Respawning...', W / 2, H / 2 + 18);
     ctx.textAlign = 'left';
     window.deathMsg--;
+  }
+};
+
+// ══════════════════════════════════════════════════════
+// RAW BEEF (hunger +1 per piece)
+// ══════════════════════════════════════════════════════
+const MEAT = 18;
+BLOCK_NAME[MEAT] = 'Raw Beef';
+C_TOP[MEAT]      = '#C03535';
+C_DARK[MEAT]     = '#7A1010';
+BLOCK_HARD[MEAT] = Infinity;
+BLOCK_DROP[MEAT] = MEAT;
+
+// 5 starting pieces in the first free hotbar slot
+(function() {
+  for (const s of hotbar) { if (!s.id || s.id === 0) { s.id = MEAT; s.n = 5; return; } }
+})();
+
+// Food restore table — extend here for future food items
+const FOOD_RESTORE = { [APPLE]: 6, [MEAT]: 1 };
+
+// Replace eatFood to handle all food types
+eatFood = function() {
+  const s = hotbar[selSlot];
+  if (!s || window.eatCd > 0) return;
+  const r = FOOD_RESTORE[s.id];
+  if (!r) return;
+  P.hunger = Math.min(P.maxHunger, P.hunger + r);
+  s.n--;
+  if (s.n <= 0) { s.id = 0; s.n = 0; }
+  window.eatCd   = 25;
+  window.eatAnim = 25;
+};
+
+// Right-click with any food = eat it
+const _meatPlacing = updatePlacing;
+updatePlacing = function() {
+  if (rmb && placeCd === 0 && FOOD_RESTORE[hotbar[selSlot].id]) { eatFood(); return; }
+  _meatPlacing();
+};
+
+// Pixel-art raw beef icon (10 cols × 8 rows)
+function drawMeatIcon(ctx, x, y, size) {
+  const MAP = [
+    [0,0,3,1,2,1,1,2,0,0],
+    [0,3,1,2,1,1,2,1,1,0],
+    [3,1,1,1,2,1,1,2,1,0],
+    [1,2,1,2,1,1,2,1,2,0],
+    [0,1,2,1,1,2,1,1,2,0],
+    [0,0,1,2,1,1,2,1,0,0],
+    [0,0,0,1,1,2,1,0,0,0],
+    [0,0,0,0,1,1,0,0,0,0],
+  ];
+  const C = ['', '#C03535', '#7A1010', '#D95050'];
+  const p = size / 10;
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 10; c++) {
+      const v = MAP[r][c];
+      if (!v) continue;
+      ctx.fillStyle = C[v];
+      ctx.fillRect(x + c * p, y + r * p, p + 0.5, p + 0.5);
+    }
+  }
+}
+
+// Override drawHotbar: draw pixel meat on top of any MEAT slot
+const _meatHotbar = drawHotbar;
+drawHotbar = function() {
+  _meatHotbar();
+  const sz = 44, pad = 3;
+  const sx0 = (W - 9 * (sz + pad)) / 2, sy0 = H - sz - 8;
+  for (let i = 0; i < 9; i++) {
+    if (hotbar[i].id !== MEAT) continue;
+    const sx = sx0 + i * (sz + pad);
+    ctx.fillStyle = '#8B8B8B';
+    ctx.fillRect(sx + 6, sy0 + 6, 32, 32);
+    drawMeatIcon(ctx, sx + 6, sy0 + 6, 32);
+    ctx.strokeStyle = '#222'; ctx.lineWidth = 1;
+    ctx.strokeRect(sx + 6, sy0 + 6, 32, 32);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 10px monospace';
+    ctx.fillText(hotbar[i].n, sx + sz - 15, sy0 + sz - 4);
   }
 };
 

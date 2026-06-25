@@ -1,0 +1,1323 @@
+<title>MiniCraft</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; display: flex; flex-direction: column; align-items: center;
+         justify-content: center; min-height: 100vh; font-family: monospace; }
+  canvas { display: block; cursor: crosshair; }
+  canvas.title-mode { cursor: default; }
+  #info { color: #777; font-size: 11px; margin-top: 6px; letter-spacing: 1px; }
+</style>
+
+<canvas id="c" width="900" height="500"></canvas>
+<div id="info">WASD: move &nbsp;·&nbsp; Space: jump &nbsp;·&nbsp; Left click: mine &nbsp;·&nbsp; Right click: place &nbsp;·&nbsp; 1-9/scroll: hotbar &nbsp;·&nbsp; Q: drop &nbsp;·&nbsp; 🪓 Mine any wood log to fell the whole tree!</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+const TILE    = 32;
+const WORLD_W = 220;
+const WORLD_H = 80;
+
+// Block IDs
+const AIR=0, GRASS=1, DIRT=2, STONE=3, SAND=4,
+      WOOD=5, LEAVES=6, COAL=7, IRON=8, BEDROCK=9, PLANKS=10;
+
+const BLOCK_NAME = ['','Grass','Dirt','Stone','Sand','Wood','Leaves','Coal Ore','Iron Ore','Bedrock','Planks'];
+const BLOCK_HARD = [0, 0.8, 0.7, 3.0, 0.5, 2.0, 0.4, 4.0, 5.0, Infinity, 1.5];
+const BLOCK_DROP = [0, DIRT, DIRT, STONE, SAND, WOOD, LEAVES, COAL, IRON, 0, PLANKS];
+
+const C_TOP = {
+  [GRASS]:'#5d9e42',[DIRT]:'#9b6b3c',[STONE]:'#9a9a9a',[SAND]:'#ddd060',
+  [WOOD]:'#7a5530',[LEAVES]:'#3da83d',[COAL]:'#8c8c8c',[IRON]:'#9c9c8c',
+  [BEDROCK]:'#484848',[PLANKS]:'#cf9a5a',
+};
+const C_DARK = {
+  [GRASS]:'#9b6b3c',[DIRT]:'#7a5230',[STONE]:'#7a7a7a',[SAND]:'#c0aa40',
+  [WOOD]:'#5a3a18',[LEAVES]:'#2a782a',[COAL]:'#6c6c6c',[IRON]:'#7c7c6c',
+  [BEDROCK]:'#333',[PLANKS]:'#a87840',
+};
+
+// World
+const world   = Array.from({length: WORLD_H}, () => new Uint8Array(WORLD_W));
+const heights = new Array(WORLD_W);
+
+function sn(x, s, a) {
+  return Math.sin(x*s)*a*0.45 + Math.sin(x*s*2.3+1.7)*a*0.35 + Math.sin(x*s*0.43+3.1)*a*0.2;
+}
+
+function generateWorld() {
+  for (let x = 0; x < WORLD_W; x++)
+    heights[x] = Math.round(WORLD_H*0.38 + sn(x,0.04,10) + sn(x,0.015,6));
+
+  for (let y = 0; y < WORLD_H; y++) {
+    for (let x = 0; x < WORLD_W; x++) {
+      const h = heights[x];
+      if (y < h)              { world[y][x] = AIR; continue; }
+      if (y === h)            { world[y][x] = GRASS; continue; }
+      if (y < h+4)            { world[y][x] = DIRT; continue; }
+      if (y === WORLD_H-1)    { world[y][x] = BEDROCK; continue; }
+      const r = Math.random();
+      world[y][x] = r<0.025 ? COAL : (r<0.038 && y>h+8 ? IRON : STONE);
+    }
+  }
+
+  // Trees
+  for (let x = 4; x < WORLD_W-4; x++) {
+    if (world[heights[x]][x] === GRASS && Math.random() < 0.07) {
+      const h = heights[x], th = 4 + Math.floor(Math.random()*2);
+      for (let ty = h-th; ty < h; ty++) if (ty>=0) world[ty][x] = WOOD;
+      for (let ly = h-th-2; ly <= h-th+1; ly++) {
+        const r = ly <= h-th-1 ? 2 : 1;
+        for (let lx = x-r; lx <= x+r; lx++)
+          if (ly>=0 && lx>=0 && lx<WORLD_W && world[ly][lx]===AIR) world[ly][lx] = LEAVES;
+      }
+    }
+  }
+
+  // Caves
+  for (let i = 0; i < 55; i++) {
+    let cx = 1+Math.floor(Math.random()*(WORLD_W-2));
+    let cy = heights[cx]+5+Math.floor(Math.random()*15);
+    let dir = Math.random()*Math.PI*2;
+    const len = 20+Math.floor(Math.random()*60);
+    for (let s = 0; s < len; s++) {
+      dir += (Math.random()-0.5)*0.7;
+      cx = Math.max(1, Math.min(WORLD_W-2, Math.round(cx+Math.cos(dir))));
+      cy = Math.max(1, Math.min(WORLD_H-2, Math.round(cy+Math.sin(dir)*0.6)));
+      if (world[cy][cx]!==BEDROCK) world[cy][cx] = AIR;
+      if (Math.random()<0.6 && cx>1) world[cy][cx-1] = AIR;
+    }
+  }
+}
+
+// Player
+const P = { x:0, y:0, vx:0, vy:0, w:16, h:32, onGround:false, facing:1, frame:0 };
+
+function spawnPlayer() {
+  const mx = Math.floor(WORLD_W/2);
+  P.x = mx*TILE + (TILE-P.w)/2;
+  for (let y = 0; y < WORLD_H; y++) {
+    if (world[y][mx] !== AIR) { P.y = (y-2)*TILE; return; }
+  }
+  P.y = 10*TILE;
+}
+
+const GRAVITY=0.4, JUMP_V=-11, SPD=3.5;
+const cam = {x:0, y:0};
+
+// Hotbar
+const hotbar = [
+  {id:GRASS,n:64},{id:DIRT,n:64},{id:STONE,n:64},
+  {id:WOOD,n:64},{id:PLANKS,n:64},{id:SAND,n:64},
+  {id:LEAVES,n:64},{id:0,n:0},{id:0,n:0},
+];
+let selSlot = 0;
+
+function addBlock(id) {
+  for (const s of hotbar) if (s.id===id && s.n<99) { s.n++; return; }
+  for (const s of hotbar) if (!s.id)               { s.id=id; s.n=1; return; }
+}
+
+// Game state
+let gameState = 'title'; // 'title' | 'playing'
+const PLAY_BTN = { x: W/2-140, y: H*0.60, w: 280, h: 52 };
+
+// Mining / placing
+let mining = null, placeCd = 0;
+let drops  = [];
+
+// Input
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (e.key>='1' && e.key<='9') selSlot = +e.key-1;
+
+  // E — next hotbar slot
+  if (e.key === 'e' || e.key === 'E') {
+    selSlot = (selSlot + 1) % 9;
+  }
+
+  // Q — previous hotbar slot
+  if (e.key === 'q' || e.key === 'Q') {
+    selSlot = (selSlot - 1 + 9) % 9;
+  }
+
+  e.preventDefault();
+});
+window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+let mx=0, my=0, lmb=false, rmb=false;
+canvas.addEventListener('mousemove', e => {
+  const r = canvas.getBoundingClientRect();
+  mx = e.clientX-r.left; my = e.clientY-r.top;
+  if (gameState === 'title') {
+    const b = PLAY_BTN;
+    canvas.style.cursor = (mx>=b.x&&mx<=b.x+b.w&&my>=b.y&&my<=b.y+b.h) ? 'pointer' : 'default';
+  } else {
+    canvas.style.cursor = 'crosshair';
+  }
+});
+canvas.addEventListener('mousedown', e => {
+  if (e.button===0) lmb=true;
+  if (e.button===2) rmb=true;
+  e.preventDefault();
+});
+canvas.addEventListener('mouseup', e => {
+  if (e.button===0) { lmb=false; mining=null; }
+  if (e.button===2) rmb=false;
+});
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('click', e => {
+  if (gameState !== 'title') return;
+  const r = canvas.getBoundingClientRect();
+  const cx = e.clientX-r.left, cy = e.clientY-r.top;
+  const b = PLAY_BTN;
+  if (cx>=b.x && cx<=b.x+b.w && cy>=b.y && cy<=b.y+b.h) {
+    gameState = 'playing';
+  }
+});
+canvas.addEventListener('wheel', e => {
+  selSlot = (selSlot + (e.deltaY>0?1:-1)+9)%9;
+  e.preventDefault();
+}, {passive:false});
+
+// Physics
+function solidAt(wx, wy) {
+  const tx=Math.floor(wx/TILE), ty=Math.floor(wy/TILE);
+  if (tx<0||tx>=WORLD_W||ty<0||ty>=WORLD_H) return true;
+  return world[ty][tx] !== AIR;
+}
+
+function updatePhysics() {
+  if (keys['ArrowLeft']||keys['a'])       { P.vx=-SPD; P.facing=-1; }
+  else if (keys['ArrowRight']||keys['d']) { P.vx=SPD;  P.facing=1;  }
+  else P.vx *= 0.75;
+
+  if ((keys[' ']||keys['ArrowUp']||keys['w']) && P.onGround) {
+    P.vy=JUMP_V; P.onGround=false;
+    keys[' ']=keys['ArrowUp']=keys['w']=false;
+    playJump();
+  }
+
+  P.vy = Math.min(P.vy+GRAVITY, 18);
+
+  P.x += P.vx;
+  if (P.vx<0 && (solidAt(P.x, P.y+2)||solidAt(P.x, P.y+P.h-2)))
+    { P.x=Math.ceil(P.x/TILE)*TILE; P.vx=0; }
+  if (P.vx>0 && (solidAt(P.x+P.w, P.y+2)||solidAt(P.x+P.w, P.y+P.h-2)))
+    { P.x=Math.floor((P.x+P.w)/TILE)*TILE-P.w; P.vx=0; }
+
+  P.y += P.vy; P.onGround=false;
+  if (P.vy>0 && (solidAt(P.x+2, P.y+P.h)||solidAt(P.x+P.w-2, P.y+P.h)))
+    { P.y=Math.floor((P.y+P.h)/TILE)*TILE-P.h; P.vy=0; P.onGround=true; }
+  if (P.vy<0 && (solidAt(P.x+2, P.y)||solidAt(P.x+P.w-2, P.y)))
+    { P.y=Math.ceil(P.y/TILE)*TILE; P.vy=0; }
+
+  P.x = Math.max(0, Math.min(P.x, WORLD_W*TILE-P.w));
+  if (P.y > WORLD_H*TILE) { P.y=10*TILE; P.vy=0; }
+
+  if (Math.abs(P.vx)>0.5 && P.onGround) P.frame+=0.15;
+}
+
+function targetBlock() {
+  return { bx:Math.floor((mx+cam.x)/TILE), by:Math.floor((my+cam.y)/TILE) };
+}
+
+function inReach(bx, by) {
+  return Math.hypot(bx*TILE+TILE/2-(P.x+P.w/2), by*TILE+TILE/2-(P.y+P.h/2)) < TILE*5;
+}
+
+function updateMining(dt) {
+  if (!lmb) { mining=null; return; }
+  const {bx,by} = targetBlock();
+  if (!inReach(bx,by)||bx<0||bx>=WORLD_W||by<0||by>=WORLD_H) { mining=null; return; }
+  const b = world[by][bx];
+  if (b===AIR||BLOCK_HARD[b]===Infinity) { mining=null; return; }
+
+  if (!mining||mining.bx!==bx||mining.by!==by)
+    mining = {bx, by, prog:0, total:BLOCK_HARD[b]*55};
+
+  mining.prog += dt;
+  if (mining.prog >= mining.total) {
+    if (b === WOOD) {
+      // Lumberjack: fell the whole tree instantly
+      fellTree(bx, by);
+    } else {
+      const drop = BLOCK_DROP[b];
+      if (drop) drops.push({x:bx*TILE+10, y:by*TILE+10, vx:(Math.random()-.5)*2, vy:-3, id:drop});
+      world[by][bx] = AIR;
+    }
+    mining = null;
+    playBreak();
+  }
+}
+
+// Flood-fill to find and chop all connected WOOD + LEAVES in a tree
+function fellTree(startX, startY) {
+  const visited = new Set();
+  const stack = [[startX, startY]];
+  while (stack.length) {
+    const [x, y] = stack.pop();
+    const key = x*1000+y;
+    if (visited.has(key)) continue;
+    if (x<0||x>=WORLD_W||y<0||y>=WORLD_H) continue;
+    const id = world[y][x];
+    if (id !== WOOD && id !== LEAVES) continue;
+    visited.add(key);
+    // Drop wood logs (leaves vanish silently)
+    if (id === WOOD) {
+      drops.push({x:x*TILE+8, y:y*TILE+8, vx:(Math.random()-.5)*2, vy:-3-Math.random()*2, id:WOOD});
+    }
+    world[y][x] = AIR;
+    // Search up, left, right (not down — trees grow up)
+    stack.push([x,y-1],[x-1,y],[x+1,y],[x,y+1]);
+  }
+}
+
+function updatePlacing() {
+  if (!rmb||placeCd>0) return;
+  const {bx,by} = targetBlock();
+  if (!inReach(bx,by)||bx<0||bx>=WORLD_W||by<0||by>=WORLD_H) return;
+  if (world[by][bx]!==AIR) return;
+  const pl=Math.floor(P.x/TILE), pr=Math.floor((P.x+P.w-1)/TILE);
+  const pt=Math.floor(P.y/TILE), pb=Math.floor((P.y+P.h-1)/TILE);
+  if (bx>=pl&&bx<=pr&&by>=pt&&by<=pb) return;
+  const s = hotbar[selSlot];
+  if (!s.id) return;
+  world[by][bx] = s.id;
+  placeCd = 10;
+}
+
+function updateDrops() {
+  for (const d of drops) {
+    d.vy += 0.3; d.x+=d.vx; d.y+=d.vy; d.vx*=0.95;
+    const tx=Math.floor((d.x+6)/TILE), ty=Math.floor((d.y+12)/TILE);
+    if (ty>=0&&ty<WORLD_H&&tx>=0&&tx<WORLD_W&&world[ty][tx]!==AIR)
+      { d.y=ty*TILE-12; d.vy*=-0.3; if(Math.abs(d.vy)<0.5)d.vy=0; }
+    if (Math.hypot(d.x+9-(P.x+P.w/2), d.y+9-(P.y+P.h/2))<40)
+      { addBlock(d.id); d.dead=true; }
+  }
+  drops = drops.filter(d=>!d.dead);
+}
+
+function updateCam() {
+  const tx=P.x+P.w/2-W/2, ty=P.y+P.h/2-H*0.5;
+  cam.x += (tx-cam.x)*0.1; cam.y += (ty-cam.y)*0.1;
+  cam.x = Math.max(0, Math.min(cam.x, WORLD_W*TILE-W));
+  cam.y = Math.max(0, Math.min(cam.y, WORLD_H*TILE-H));
+}
+
+// Drawing
+function drawBlock(bx, by, type) {
+  const sx=bx*TILE-cam.x, sy=by*TILE-cam.y;
+  if (sx>W+2||sy>H+2||sx+TILE<-2||sy+TILE<-2) return;
+
+  ctx.fillStyle = C_TOP[type]||'#888';
+  ctx.fillRect(sx, sy, TILE, TILE);
+  ctx.fillStyle = C_DARK[type]||'#555';
+  ctx.fillRect(sx, sy+TILE-5, TILE, 5);
+  ctx.fillRect(sx+TILE-5, sy, 5, TILE-5);
+  ctx.fillStyle = 'rgba(255,255,255,0.13)';
+  ctx.fillRect(sx, sy, TILE, 4);
+  ctx.fillRect(sx, sy, 4, TILE);
+
+  if (type===GRASS) { ctx.fillStyle='#5d9e42'; ctx.fillRect(sx,sy,TILE,7); }
+  if (type===COAL) {
+    ctx.fillStyle='#222';
+    ctx.fillRect(sx+7,sy+7,5,5); ctx.fillRect(sx+18,sy+17,6,5); ctx.fillRect(sx+10,sy+20,4,4);
+  }
+  if (type===IRON) {
+    ctx.fillStyle='#d4873c';
+    ctx.fillRect(sx+7,sy+7,5,5); ctx.fillRect(sx+18,sy+17,6,5);
+  }
+  if (type===WOOD) {
+    ctx.fillStyle='rgba(0,0,0,0.18)';
+    ctx.fillRect(sx+10,sy,4,TILE); ctx.fillRect(sx+18,sy,3,TILE);
+  }
+  if (type===PLANKS) {
+    ctx.fillStyle='rgba(0,0,0,0.15)';
+    ctx.fillRect(sx,sy+10,TILE,2); ctx.fillRect(sx,sy+22,TILE,2);
+    ctx.fillRect(sx+16,sy,2,10);  ctx.fillRect(sx+8,sy+12,2,10);
+  }
+
+  ctx.strokeStyle='rgba(0,0,0,0.2)'; ctx.lineWidth=0.5;
+  ctx.strokeRect(sx+.5, sy+.5, TILE-1, TILE-1);
+}
+
+function drawWorld() {
+  const x0=Math.max(0,Math.floor(cam.x/TILE));
+  const x1=Math.min(WORLD_W, Math.ceil((cam.x+W)/TILE)+1);
+  const y0=Math.max(0,Math.floor(cam.y/TILE));
+  const y1=Math.min(WORLD_H, Math.ceil((cam.y+H)/TILE)+1);
+  for (let y=y0; y<y1; y++)
+    for (let x=x0; x<x1; x++)
+      if (world[y][x]) drawBlock(x,y,world[y][x]);
+}
+
+function drawHighlight() {
+  const {bx,by}=targetBlock();
+  if (!inReach(bx,by)||bx<0||bx>=WORLD_W||by<0||by>=WORLD_H) return;
+  if (world[by][bx]===AIR&&!rmb) return;
+  ctx.strokeStyle='rgba(0,0,0,0.7)'; ctx.lineWidth=2;
+  ctx.strokeRect(bx*TILE-cam.x+1, by*TILE-cam.y+1, TILE-2, TILE-2);
+}
+
+function drawMiningOverlay() {
+  if (!mining) return;
+  const sx=mining.bx*TILE-cam.x, sy=mining.by*TILE-cam.y;
+  const p=mining.prog/mining.total;
+  ctx.fillStyle=`rgba(0,0,0,${p*0.5})`; ctx.fillRect(sx,sy,TILE,TILE);
+  ctx.strokeStyle=`rgba(20,8,0,${0.4+p*0.5})`; ctx.lineWidth=1.5;
+  const n=Math.floor(p*7);
+  for (let i=0;i<n;i++) {
+    ctx.beginPath();
+    ctx.moveTo(sx+5+i*4, sy+5+i*4);
+    ctx.lineTo(sx+12+i*3, sy+14+i*3);
+    ctx.stroke();
+  }
+}
+
+function drawDrops() {
+  for (const d of drops) {
+    const sx=Math.round(d.x-cam.x), sy=Math.round(d.y-cam.y);
+    const sz = 18;
+    // glow
+    ctx.shadowColor = C_TOP[d.id]||'#fff'; ctx.shadowBlur = 8;
+    ctx.fillStyle = C_TOP[d.id]||'#888'; ctx.fillRect(sx, sy, sz, sz);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = C_DARK[d.id]||'#555';
+    ctx.fillRect(sx, sy+sz-5, sz, 5);
+    ctx.fillRect(sx+sz-5, sy, 5, sz);
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.fillRect(sx, sy, sz, 4); ctx.fillRect(sx, sy, 4, sz);
+    ctx.strokeStyle='#222'; ctx.lineWidth=1.5; ctx.strokeRect(sx,sy,sz,sz);
+  }
+}
+
+function drawPlayer() {
+  const sx=Math.round(P.x-cam.x+P.w/2);
+  const sy=Math.round(P.y-cam.y+P.h);
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.scale(P.facing, 1);
+  ctx.lineCap='round';
+  const leg=Math.sin(P.frame)*11;
+  const arm=Math.sin(P.frame)*13;
+
+  // === dark purple villager skin ===
+
+  // legs — dark black with purple trim
+  ctx.strokeStyle='#1a0a2a'; ctx.lineWidth=5;
+  ctx.beginPath(); ctx.moveTo(-4,-4); ctx.lineTo(-4+leg*0.4,-0+leg); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(4,-4);  ctx.lineTo(4-leg*0.4,0-leg); ctx.stroke();
+  // purple boot highlight
+  ctx.strokeStyle='#6a20c0'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.moveTo(-4,-4); ctx.lineTo(-4+leg*0.4,-0+leg); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(4,-4);  ctx.lineTo(4-leg*0.4,0-leg); ctx.stroke();
+
+  // body — dark with purple center glow stripe
+  ctx.fillStyle='#0d0818'; ctx.fillRect(-8,-24,16,20);
+  ctx.fillStyle='#6a20c0'; ctx.fillRect(-2,-23,4,18); // purple vertical stripe
+  ctx.fillStyle='rgba(120,40,220,0.3)'; ctx.fillRect(-8,-24,16,20); // subtle purple tint
+  ctx.strokeStyle='#2a0a4a'; ctx.lineWidth=1; ctx.strokeRect(-8,-24,16,20);
+
+  // shoulder pads — wider dark blocks
+  ctx.fillStyle='#1a0830'; ctx.fillRect(-11,-24,5,7);
+  ctx.fillRect(6,-24,5,7);
+  ctx.strokeStyle='#6a20c0'; ctx.lineWidth=1;
+  ctx.strokeRect(-11,-24,5,7); ctx.strokeRect(6,-24,5,7);
+
+  // arms — dark with purple edge
+  ctx.strokeStyle='#0d0818'; ctx.lineWidth=4;
+  ctx.beginPath(); ctx.moveTo(-9,-22); ctx.lineTo(-14,-14+arm); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(9,-22);  ctx.lineTo(14,-14-arm); ctx.stroke();
+  ctx.strokeStyle='#6a20c0'; ctx.lineWidth=1.2;
+  ctx.beginPath(); ctx.moveTo(-9,-22); ctx.lineTo(-14,-14+arm); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(9,-22);  ctx.lineTo(14,-14-arm); ctx.stroke();
+
+  // axe in right hand
+  ctx.save();
+  ctx.translate(14, -14-arm);
+  ctx.rotate(-0.4);
+  ctx.fillStyle='#7a5530'; ctx.fillRect(0,-1,12,2);   // handle
+  ctx.fillStyle='#9a9ab0'; ctx.fillRect(9,-6,5,10);   // blade body
+  ctx.fillStyle='#c0c0d8'; ctx.fillRect(11,-7,3,3);   // blade edge
+  ctx.restore();
+
+  // head — dark black with purple glow
+  ctx.fillStyle='#0d0818'; ctx.fillRect(-7,-38,14,14);
+  ctx.strokeStyle='#2a0a4a'; ctx.lineWidth=1.5; ctx.strokeRect(-7,-38,14,14);
+
+  // hood / shadow on top of head
+  ctx.fillStyle='#070510'; ctx.fillRect(-8,-39,16,6);
+  ctx.strokeStyle='#3a0a6a'; ctx.lineWidth=1; ctx.strokeRect(-8,-39,16,6);
+
+  // purple glowing eyes
+  ctx.shadowColor='#a040ff'; ctx.shadowBlur=8;
+  ctx.fillStyle='#bf5fff';
+  ctx.fillRect(-5,-33,4,3);
+  ctx.fillRect(2,-33,4,3);
+  ctx.shadowBlur=0;
+
+  // subtle purple face glow
+  ctx.fillStyle='rgba(140,40,255,0.12)'; ctx.fillRect(-7,-38,14,14);
+
+  ctx.restore();
+}
+
+function drawHotbar() {
+  const sz=44, pad=3;
+  const sx0=(W-9*(sz+pad))/2, sy0=H-sz-8;
+  for (let i=0;i<9;i++) {
+    const sx=sx0+i*(sz+pad), sy=sy0, sel=i===selSlot;
+    ctx.fillStyle = sel?'rgba(255,255,220,0.22)':'rgba(0,0,0,0.55)';
+    ctx.fillRect(sx,sy,sz,sz);
+    ctx.strokeStyle=sel?'#fff':'#888'; ctx.lineWidth=sel?2.5:1;
+    ctx.strokeRect(sx,sy,sz,sz);
+    const s=hotbar[i];
+    if (s.id) {
+      ctx.fillStyle=C_TOP[s.id]||'#888'; ctx.fillRect(sx+6,sy+6,32,32);
+      ctx.fillStyle=C_DARK[s.id]||'#555';
+      ctx.fillRect(sx+6,sy+30,32,8); ctx.fillRect(sx+30,sy+6,8,32);
+      ctx.strokeStyle='#222'; ctx.lineWidth=1; ctx.strokeRect(sx+6,sy+6,32,32);
+      ctx.fillStyle='#fff'; ctx.font='bold 10px monospace';
+      ctx.fillText(s.n, sx+sz-15, sy+sz-4);
+    }
+    ctx.fillStyle='#aaa'; ctx.font='9px monospace';
+    ctx.fillText(i+1, sx+3, sy+11);
+  }
+  const s=hotbar[selSlot];
+  if (s.id) {
+    const name=BLOCK_NAME[s.id]||'';
+    ctx.font='13px monospace';
+    const tw=ctx.measureText(name).width;
+    ctx.fillStyle='rgba(0,0,0,0.5)';
+    ctx.fillRect(W/2-tw/2-4, sy0-24, tw+8, 18);
+    ctx.fillStyle='#eee'; ctx.fillText(name, W/2-tw/2, sy0-10);
+  }
+}
+
+function drawHUD() {
+  ctx.fillStyle='rgba(0,0,0,0.4)'; ctx.fillRect(6,6,160,20);
+  ctx.fillStyle='#ccc'; ctx.font='11px monospace';
+  ctx.fillText(`X:${Math.floor(P.x/TILE)}  Y:${Math.floor(P.y/TILE)}`, 12, 20);
+
+  // Lumberjack badge
+  ctx.fillStyle='rgba(60,0,100,0.75)'; ctx.fillRect(6,30,170,18);
+  ctx.shadowColor='#a040ff'; ctx.shadowBlur=6;
+  ctx.fillStyle='#bf80ff'; ctx.font='bold 11px monospace';
+  ctx.fillText('🪓 Lumberjack: mine a tree to fell it', 10, 43);
+  ctx.shadowBlur=0;
+}
+
+function drawTitleBlock(sx, sy, BS, type, col, row) {
+  const s = col * 17 + row * 31; // deterministic seed
+
+  if (type === 'grass') {
+    // brown dirt base
+    ctx.fillStyle = '#8B5E3C'; ctx.fillRect(sx, sy, BS, BS);
+    // darker dirt spots
+    ctx.fillStyle = '#6B4020';
+    if (s%3===0) ctx.fillRect(sx+4,  sy+BS*0.35, BS*0.22, BS*0.18);
+    if (s%5===0) ctx.fillRect(sx+BS*0.55, sy+BS*0.55, BS*0.28, BS*0.16);
+    if (s%7===0) ctx.fillRect(sx+BS*0.2, sy+BS*0.65, BS*0.18, BS*0.14);
+    // green top strip
+    const gH = Math.round(BS * 0.30);
+    ctx.fillStyle = '#6ab04c'; ctx.fillRect(sx, sy, BS, gH);
+    // lighter green patches
+    ctx.fillStyle = '#8dc56a';
+    if (s%3===0) ctx.fillRect(sx+BS*0.12, sy+2, BS*0.18, gH-4);
+    if (s%4===0) ctx.fillRect(sx+BS*0.55, sy+3, BS*0.22, gH-5);
+    if (s%6===0) ctx.fillRect(sx+BS*0.35, sy+1, BS*0.14, gH-3);
+    // dark green edge
+    ctx.fillStyle = '#4a8a30';
+    if (s%5===0) ctx.fillRect(sx+BS*0.72, sy+2, BS*0.12, gH-4);
+    if (s%8===0) ctx.fillRect(sx+2, sy+1, BS*0.10, gH-3);
+
+  } else if (type === 'stone') {
+    ctx.fillStyle = '#8a8a8a'; ctx.fillRect(sx, sy, BS, BS);
+    ctx.fillStyle = '#666';
+    if (s%2===0) ctx.fillRect(sx+5, sy+8, BS*0.3, BS*0.22);
+    if (s%3===0) ctx.fillRect(sx+BS*0.55, sy+BS*0.5, BS*0.3, BS*0.22);
+    ctx.fillStyle = '#aaa';
+    if (s%4===0) ctx.fillRect(sx+2, sy+3, BS*0.15, BS*0.12);
+
+  } else { // dirt
+    ctx.fillStyle = '#8B5E3C'; ctx.fillRect(sx, sy, BS, BS);
+    ctx.fillStyle = '#6B4020';
+    if (s%3===0) ctx.fillRect(sx+5,      sy+7,      BS*0.24, BS*0.18);
+    if (s%4===0) ctx.fillRect(sx+BS*0.55, sy+BS*0.55, BS*0.28, BS*0.20);
+    if (s%5===0) ctx.fillRect(sx+BS*0.2, sy+BS*0.65, BS*0.20, BS*0.15);
+    if (s%7===0) ctx.fillRect(sx+BS*0.65, sy+12,     BS*0.18, BS*0.14);
+    ctx.fillStyle = '#7a5030';
+    if (s%6===0) ctx.fillRect(sx+BS*0.4, sy+BS*0.3, BS*0.15, BS*0.12);
+  }
+
+  // block border
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1.5;
+  ctx.strokeRect(sx+0.5, sy+0.5, BS-1, BS-1);
+}
+
+function drawTitleScreen() {
+  const BS = 72;
+  const cols = Math.ceil(W/BS)+1, rows = Math.ceil(H/BS)+1;
+  const grassRows = 2;
+
+  // stone positions (scattered in dirt)
+  const stoneSet = new Set([3*100+2, 2*100+5, 4*100+1, 5*100+4, 3*100+7, 6*100+3, 4*100+9, 7*100+2]);
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const sx = col*BS, sy = row*BS;
+      let type = row < grassRows ? 'grass' :
+                 stoneSet.has(row*100+col) ? 'stone' : 'dirt';
+      drawTitleBlock(sx, sy, BS, type, col, row);
+    }
+  }
+
+  // subtle dark gradient so logo pops
+  const ov = ctx.createLinearGradient(0,0,0,H);
+  ov.addColorStop(0,'rgba(0,0,0,0.08)');
+  ov.addColorStop(0.45,'rgba(0,0,0,0.38)');
+  ov.addColorStop(1,'rgba(0,0,0,0.65)');
+  ctx.fillStyle = ov; ctx.fillRect(0,0,W,H);
+
+  // ── MINICRAFT logo ───────────────────────────────────────
+  const lx = W/2, ly = Math.round(H*0.47);
+  ctx.textAlign = 'center';
+
+  // black 3-D shadow stack (offset bottom-right)
+  ctx.font = 'bold 86px monospace';
+  for (let i = 8; i >= 1; i--) {
+    const a = 0.55 + i*0.025;
+    ctx.fillStyle = `rgba(10,5,0,${a})`;
+    ctx.fillText('MINICRAFT', lx+i*1.1, ly+i*1.1);
+  }
+
+  // heavy black stroke
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 11;
+  ctx.lineJoin = 'round';
+  ctx.strokeText('MINICRAFT', lx, ly);
+
+  // white fill
+  ctx.fillStyle = '#f0f0f0';
+  ctx.fillText('MINICRAFT', lx, ly);
+
+  // top highlight shine
+  ctx.fillStyle = 'rgba(255,255,255,0.28)';
+  ctx.font = 'bold 86px monospace';
+  ctx.fillText('MINICRAFT', lx-1.5, ly-3);
+
+  // ── Play button ──────────────────────────────────────────
+  const b = PLAY_BTN;
+  const hov = mx>=b.x && mx<=b.x+b.w && my>=b.y && my<=b.y+b.h;
+
+  ctx.fillStyle = hov ? '#7a7a7a' : '#555';
+  ctx.fillRect(b.x, b.y, b.w, b.h);
+  ctx.fillStyle = 'rgba(255,255,255,0.2)';
+  ctx.fillRect(b.x, b.y, b.w, 5); ctx.fillRect(b.x, b.y, 4, b.h);
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(b.x, b.y+b.h-5, b.w, 5); ctx.fillRect(b.x+b.w-4, b.y, 4, b.h);
+  ctx.strokeStyle = hov ? '#fff' : '#aaa'; ctx.lineWidth = 2;
+  ctx.strokeRect(b.x+1, b.y+1, b.w-2, b.h-2);
+  ctx.font = 'bold 21px monospace';
+  ctx.fillStyle = hov ? '#fff' : '#e8e8e8';
+  ctx.fillText('▶  Singleplayer', b.x+b.w/2, b.y+34);
+
+  // hint
+  ctx.font = '11px monospace';
+  ctx.fillStyle = 'rgba(180,180,180,0.65)';
+  ctx.fillText('WASD · Space: jump · Left click: mine · Right click: place · 1-9: hotbar', lx, H-14);
+}
+
+function drawSky() {
+  const depth=Math.max(0,Math.min(1,cam.y/(WORLD_H*TILE*0.5)));
+  const r1=Math.round(135-depth*70), g1=Math.round(206-depth*80), b1=Math.round(235-depth*60);
+  const r2=Math.round(200-depth*50), g2=Math.round(232-depth*50), b2=Math.round(250-depth*30);
+  const grad=ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0,`rgb(${r1},${g1},${b1})`);
+  grad.addColorStop(1,`rgb(${r2},${g2},${b2})`);
+  ctx.fillStyle=grad; ctx.fillRect(0,0,W,H);
+}
+
+// Audio
+const audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+
+function playJump() {
+  try {
+    const now=audioCtx.currentTime;
+    const osc=audioCtx.createOscillator(), g=audioCtx.createGain();
+    osc.connect(g); g.connect(audioCtx.destination);
+    osc.type='sine';
+    osc.frequency.setValueAtTime(280,now);
+    osc.frequency.exponentialRampToValueAtTime(560,now+0.1);
+    g.gain.setValueAtTime(0.14,now);
+    g.gain.exponentialRampToValueAtTime(0.001,now+0.15);
+    osc.start(now); osc.stop(now+0.15);
+  } catch(e){}
+}
+
+function playBreak() {
+  try {
+    const now=audioCtx.currentTime;
+    const buf=audioCtx.createBuffer(1,Math.floor(audioCtx.sampleRate*0.07),audioCtx.sampleRate);
+    const d=buf.getChannelData(0);
+    for (let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+    const src=audioCtx.createBufferSource(); src.buffer=buf;
+    const lp=audioCtx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=500;
+    const g=audioCtx.createGain();
+    g.gain.setValueAtTime(0.25,now); g.gain.exponentialRampToValueAtTime(0.001,now+0.07);
+    src.connect(lp); lp.connect(g); g.connect(audioCtx.destination);
+    src.start(now); src.stop(now+0.07);
+  } catch(e){}
+}
+
+// Main loop
+let lastT = 0;
+function loop(t) {
+  const dt = Math.min((t-lastT)/16.67, 3);
+  lastT = t;
+
+  if (gameState === 'title') {
+    drawTitleScreen();
+  } else {
+    if (placeCd>0) placeCd--;
+    updatePhysics();
+    updateMining(dt);
+    updatePlacing();
+    updateDrops();
+    updateCam();
+    drawSky();
+    drawWorld();
+    drawHighlight();
+    drawMiningOverlay();
+    drawDrops();
+    drawPlayer();
+    drawHotbar();
+    drawHUD();
+  }
+
+  requestAnimationFrame(loop);
+}
+
+generateWorld();
+spawnPlayer();
+requestAnimationFrame(loop);
+
+drawPlayer = function() {
+  const sx=Math.round(P.x-cam.x+P.w/2);
+  const sy=Math.round(P.y-cam.y+P.h);
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.scale(P.facing, 1);
+  ctx.lineCap='round';
+  const leg=Math.sin(P.frame)*11;
+  const arm=Math.sin(P.frame)*13;
+
+  // legs
+  ctx.strokeStyle='#1a0a2a'; ctx.lineWidth=5;
+  ctx.beginPath(); ctx.moveTo(-4,-4); ctx.lineTo(-4+leg*0.4,-0+leg); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(4,-4);  ctx.lineTo(4-leg*0.4,0-leg); ctx.stroke();
+  ctx.strokeStyle='#6a20c0'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.moveTo(-4,-4); ctx.lineTo(-4+leg*0.4,-0+leg); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(4,-4);  ctx.lineTo(4-leg*0.4,0-leg); ctx.stroke();
+
+  // body
+  ctx.fillStyle='#0d0818'; ctx.fillRect(-8,-24,16,20);
+  ctx.fillStyle='#6a20c0'; ctx.fillRect(-2,-23,4,18);
+  ctx.fillStyle='rgba(120,40,220,0.3)'; ctx.fillRect(-8,-24,16,20);
+  ctx.strokeStyle='#2a0a4a'; ctx.lineWidth=1; ctx.strokeRect(-8,-24,16,20);
+
+  // shoulders
+  ctx.fillStyle='#1a0830'; ctx.fillRect(-11,-24,5,7);
+  ctx.fillRect(6,-24,5,7);
+  ctx.strokeStyle='#6a20c0'; ctx.lineWidth=1;
+  ctx.strokeRect(-11,-24,5,7); ctx.strokeRect(6,-24,5,7);
+
+  // arms
+  ctx.strokeStyle='#0d0818'; ctx.lineWidth=4;
+  ctx.beginPath(); ctx.moveTo(-9,-22); ctx.lineTo(-14,-14+arm); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(9,-22);  ctx.lineTo(14,-14-arm); ctx.stroke();
+  ctx.strokeStyle='#6a20c0'; ctx.lineWidth=1.2;
+  ctx.beginPath(); ctx.moveTo(-9,-22); ctx.lineTo(-14,-14+arm); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(9,-22);  ctx.lineTo(14,-14-arm); ctx.stroke();
+
+  // === DIAMOND PICKAXE (PERFECT POSITION) ===
+  ctx.save();
+  ctx.translate(14, -14-arm); // Ճիշտ կապ ձեռքի հետ
+  ctx.rotate(-0.4);           // Բնօրինակ թեքություն
+
+  // 1. Փայտե կոթ (Ճիշտ անկյունով)
+  ctx.strokeStyle = '#7a5530'; 
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = 'square';
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(11, 0);
+  ctx.stroke();
+
+  // 2. Ադամանդե գլխիկի մուգ եզրագիծը
+  ctx.strokeStyle = '#102020';
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'square';
+  ctx.beginPath();
+  ctx.moveTo(8, -6);
+  ctx.lineTo(11, 0);
+  ctx.lineTo(8, 6);
+  ctx.stroke();
+
+  // 3. Ադամանդե կապույտ միջուկը
+  ctx.strokeStyle = '#00ffee';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(9, -5);
+  ctx.lineTo(11, 0);
+  ctx.lineTo(9, 5);
+  ctx.stroke();
+
+  ctx.restore();
+
+  // head & eyes
+  ctx.fillStyle='#0d0818'; ctx.fillRect(-7,-38,14,14);
+  ctx.strokeStyle='#2a0a4a'; ctx.lineWidth=1.5; ctx.strokeRect(-7,-38,14,14);
+  ctx.fillStyle='#070510'; ctx.fillRect(-8,-39,16,6);
+  ctx.strokeStyle='#3a0a6a'; ctx.lineWidth=1; ctx.strokeRect(-8,-39,16,6);
+  ctx.shadowColor='#a040ff'; ctx.shadowBlur=8; ctx.fillStyle='#bf5fff';
+  ctx.fillRect(-5,-33,4,3); ctx.fillRect(2,-33,4,3); ctx.shadowBlur=0;
+  ctx.fillStyle='rgba(140,40,255,0.12)'; ctx.fillRect(-7,-38,14,14);
+  ctx.restore();
+}
+
+addBlock = function(id) {
+
+  for (const s of hotbar) {
+    if (s.id === id && s.n < 64) { 
+      s.n++; 
+      return; 
+    }
+  }
+
+  for (const s of hotbar) {
+    if (!s.id) {               
+      s.id = id; 
+      s.n = 1; 
+      return; 
+    }
+  }
+}
+
+// 1. Ստեղծում ենք մեծ պայուսակը (27 սլոտ)
+window.inventory = [];
+for (let i = 0; i < 27; i++) {
+  window.inventory.push({ id: 0, n: 0 });
+}
+let showInventory = false;
+
+// 2. Բլոկներ հավաքելու ֆունկցիա (64-ի սահմանափակմամբ)
+addBlock = function(id) {
+  for (const s of hotbar) {
+    if (s.id === id && s.n < 64) { s.n++; return; }
+  }
+  for (const s of hotbar) {
+    if (!s.id || s.id === 0) { s.id = id; s.n = 1; return; }
+  }
+  for (const s of window.inventory) {
+    if (s.id === id && s.n < 64) { s.n++; return; }
+  }
+  for (const s of window.inventory) {
+    if (!s.id || s.id === 0) { s.id = id; s.n = 1; return; }
+  }
+};
+
+// 3. Կոճակի Click-ի ստուգում
+canvas.addEventListener('click', e => {
+  const r = canvas.getBoundingClientRect();
+  const cx = e.clientX - r.left;
+  const cy = e.clientY - r.top;
+
+  if (gameState === 'title') {
+    const b = PLAY_BTN;
+    if (cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h) {
+      gameState = 'playing';
+    }
+    return;
+  }
+
+  // 3 կետանոց կոճակի սեղմումը
+  if (cx >= W - 50 && cx <= W - 10 && cy >= 10 && cy <= 50) {
+    showInventory = !showInventory;
+    return;
+  }
+});
+
+// 4. Հիմնական Loop-ը, որը ԲԼՈԿՆԵՐԸ ԴՆՈՒՄ Է ՎԱՆԴԱԿՆԵՐԻ ՄԵՋ
+loop = function(t) {
+  const dt = Math.min((t - (window.lastT || t)) / 16.67, 3);
+  window.lastT = t;
+
+  if (gameState === 'title') {
+    drawTitleScreen();
+  } else {
+    // Խաղը կանգնում է, երբ պայուսակը բաց է
+    if (!showInventory) {
+      if (placeCd > 0) placeCd--;
+      updatePhysics();
+      updateMining(dt);
+      updatePlacing();
+      updateDrops();
+      updateCam();
+    }
+
+    drawSky();
+    drawWorld();
+    drawHighlight();
+    drawMiningOverlay();
+    drawDrops();
+    drawPlayer();
+    drawHotbar();
+    drawHUD();
+
+    // 3 կետով կոճակը վերևի աջ անկյունում
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.fillRect(W - 45, 10, 35, 35);
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(W - 45, 10, 35, 35);
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(W - 27, 18, 2.5, 0, Math.PI * 2);
+    ctx.arc(W - 27, 27, 2.5, 0, Math.PI * 2);
+    ctx.arc(W - 27, 36, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // ՊԱՅՈՒՍԱԿԻ ԷԿՐԱՆԸ (INVENTORY)
+    if (showInventory) {
+      // Մեծ մոխրագույն ֆոնը
+      ctx.fillStyle = 'rgba(40, 40, 40, 0.95)';
+      ctx.fillRect(W / 2 - 210, H / 2 - 140, 420, 260);
+      ctx.strokeStyle = '#1e1e1e';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(W / 2 - 210, H / 2 - 140, 420, 260);
+
+      // Վերնագիր
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 16px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('🧳 INVENTORY', W / 2, H / 2 - 110);
+
+      let xStart = W / 2 - 188;
+      let yStart = H / 2 - 80;
+      let slotSize = 36;
+      
+      for (let row = 0; row < 3; row++) {
+        for (let col = 0; col < 9; col++) {
+          let idx = row * 9 + col;
+          let item = window.inventory[idx];
+          let slotX = xStart + col * (slotSize + 6);
+          let slotY = yStart + row * (slotSize + 6);
+          
+          // Նկարում ենք դատարկ մոխրագույն վանդակը
+          ctx.fillStyle = '#8b8b8b';
+          ctx.fillRect(slotX, slotY, slotSize, slotSize);
+          ctx.strokeStyle = '#373737';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(slotX, slotY, slotSize, slotSize);
+          
+          // Եթե այս վանդակում բլոկ կա
+          if (item && item.id > 0) {
+            ctx.save();
+            
+            // ԿԱՐԵՎՈՐ ՈՒՂՂՈՒՄ. չեզոքացնում ենք կամերայի (cam.x/y) ազդեցությունը,
+            // որպեսզի drawBlock-ը նկարի ճիշտ վանդակի ներսում
+            let fakeBx = (slotX + cam.x) / TILE;
+            let fakeBy = (slotY + cam.y) / TILE;
+            
+            // Կանչում ենք խաղի նկարելու ֆունկցիան
+            drawBlock(fakeBx, fakeBy, item.id);
+            
+            ctx.restore();
+
+            // Քանակի թիվը դնում ենք վանդակի ներքևի աջ անկյունում
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 11px monospace';
+            ctx.textAlign = 'right';
+            ctx.shadowColor = '#000';
+            ctx.shadowBlur = 3;
+            ctx.fillText(item.n, slotX + slotSize - 3, slotY + slotSize - 3);
+            ctx.shadowBlur = 0; 
+          }
+        }
+      }
+      ctx.textAlign = 'left';
+    }
+  }
+  requestAnimationFrame(loop);
+};
+
+// 1. Մաքրում ենք հին երկնքի ֆունկցիան, որ խաղը չսառի
+window.drawSky = function() {};
+
+// 2. Ստեղծում ենք պայուսակի զանգվածը (27 սլոտ)
+window.inventory = [];
+for (let i = 0; i < 27; i++) {
+  window.inventory.push({ id: 0, n: 0 });
+}
+window.showInventory = false;
+
+// Օրվա ժամանակը (սկսվում է ցերեկից)
+window.gameTime = 6000; 
+
+// 3. Բլոկներ հավաքելու ճիշտ ֆունկցիան (64-ի սահմանափակմամբ)
+window.addBlock = function(id) {
+  for (const s of hotbar) {
+    if (s.id === id && s.n < 64) { s.n++; return; }
+  }
+  for (const s of hotbar) {
+    if (!s.id || s.id === 0) { s.id = id; s.n = 1; return; }
+  }
+  for (const s of window.inventory) {
+    if (s.id === id && s.n < 64) { s.n++; return; }
+  }
+  for (const s of window.inventory) {
+    if (!s.id || s.id === 0) { s.id = id; s.n = 1; return; }
+  }
+};
+
+// 4. Մկնիկի սեղմման ստուգում (3 կետանոց կոճակի համար)
+canvas.addEventListener('click', e => {
+  const r = canvas.getBoundingClientRect();
+  const cx = e.clientX - r.left;
+  const cy = e.clientY - r.top;
+
+  if (gameState === 'title') {
+    const b = PLAY_BTN;
+    if (cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h) {
+      gameState = 'playing';
+    }
+    return;
+  }
+
+  if (cx >= W - 50 && cx <= W - 10 && cy >= 10 && cy <= 50) {
+    window.showInventory = !window.showInventory;
+    return;
+  }
+});
+
+// Աստղերի ստեղծում գիշերվա համար
+window.stars = [];
+for(let i=0; i<60; i++) {
+  window.stars.push({ x: Math.random() * W, y: Math.random() * (H - 150), r: Math.random() * 1.5 });
+}
+
+// 5. ԱՄԲՈՂՋԱԿԱՆ ԽԱՂԱՅԻՆ ԼՈՒՊ (ԱՎԵԼԻ ԴԱՆԴԱՂ ՕՐ/ԳԻՇԵՐՈՎ)
+window.loop = function(t) {
+  const dt = Math.min((t - (window.lastT || t)) / 16.67, 3);
+  window.lastT = t;
+
+  if (gameState === 'title') {
+    drawTitleScreen();
+  } else {
+    if (!window.showInventory) {
+      if (placeCd > 0) placeCd--;
+      updatePhysics();
+      updateMining(dt);
+      updatePlacing();
+      updateDrops();
+      updateCam();
+      
+      // ── ԱՅՍՏԵՂ Է ՓՈՓՈԽՈՒԹՅՈՒՆԸ ──
+      // +2 արագությամբ ժամանակը կգնա շատ ավելի դանդաղ ու հանգիստ
+      window.gameTime = (window.gameTime + 2) % 24000;
+    }
+
+    // Երկնքի գույնի փոփոխություն (Day/Night)
+    let skyColor = '#4a82e8'; 
+    let starOpacity = 0;
+
+    if (window.gameTime >= 12000 && window.gameTime < 14000) {
+      // Մայրամուտ (տևում է ավելի երկար)
+      let p = (window.gameTime - 12000) / 2000;
+      skyColor = `rgb(${74 - p*44}, ${130 - p*90}, ${232 - p*172})`;
+    } else if (window.gameTime >= 14000 && window.gameTime < 16000) {
+      let p = (window.gameTime - 14000) / 2000;
+      skyColor = `rgb(${30 - p*22}, ${40 - p*32}, ${60 - p*48})`;
+      starOpacity = p;
+    } else if (window.gameTime >= 16000 && window.gameTime < 21000) {
+      // Գիշեր
+      skyColor = '#08080c';
+      starOpacity = 1;
+    } else if (window.gameTime >= 21000 && window.gameTime < 23000) {
+      // Լուսաբաց
+      let p = (window.gameTime - 21000) / 2000;
+      skyColor = `rgb(${8 + p*66}, ${8 + p*122}, ${12 + p*220})`;
+      starOpacity = 1 - p;
+    }
+
+    // Նկարում ենք ֆոնային երկինքը
+    ctx.fillStyle = skyColor;
+    ctx.fillRect(0, 0, W, H);
+
+    // Նկարում ենք աստղերը
+    if (starOpacity > 0) {
+      ctx.fillStyle = `rgba(255, 255, 255, ${starOpacity})`;
+      for (const s of window.stars) {
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Նկարում ենք աշխարհի օբյեկտները
+    drawWorld();
+    drawHighlight();
+    drawMiningOverlay();
+    drawDrops();
+    drawPlayer();
+    drawHotbar();
+    drawHUD();
+
+    // 3 կետով կոճակը վերևի աջ անկյունում
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.fillRect(W - 45, 10, 35, 35);
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(W - 45, 10, 35, 35);
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(W - 27, 18, 2.5, 0, Math.PI * 2);
+    ctx.arc(W - 27, 27, 2.5, 0, Math.PI * 2);
+    ctx.arc(W - 27, 36, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // ՊԱՅՈՒՍԱԿԻ ԷԿՐԱՆԸ (INVENTORY)
+    if (window.showInventory) {
+      ctx.fillStyle = 'rgba(40, 40, 40, 0.95)';
+      ctx.fillRect(W / 2 - 210, H / 2 - 140, 420, 260);
+      ctx.strokeStyle = '#1e1e1e';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(W / 2 - 210, H / 2 - 140, 420, 260);
+
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 16px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('🧳 INVENTORY', W / 2, H / 2 - 110);
+
+      let xStart = W / 2 - 188;
+      let yStart = H / 2 - 80;
+      let slotSize = 36;
+      
+      for (let row = 0; row < 3; row++) {
+        for (let col = 0; col < 9; col++) {
+          let idx = row * 9 + col;
+          let item = window.inventory[idx];
+          let slotX = xStart + col * (slotSize + 6);
+          let slotY = yStart + row * (slotSize + 5);
+          
+          ctx.fillStyle = '#8b8b8b';
+          ctx.fillRect(slotX, slotY, slotSize, slotSize);
+          ctx.strokeStyle = '#373737';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(slotX, slotY, slotSize, slotSize);
+          
+          if (item && item.id > 0) {
+            ctx.save();
+            let fakeBx = (slotX + cam.x) / TILE;
+            let fakeBy = (slotY + cam.y) / TILE;
+            drawBlock(fakeBx, fakeBy, item.id);
+            ctx.restore();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 11px monospace';
+            ctx.textAlign = 'right';
+            ctx.shadowColor = '#000';
+            ctx.shadowBlur = 3;
+            ctx.fillText(item.n, slotX + slotSize - 3, slotY + slotSize - 3);
+            ctx.shadowBlur = 0; 
+          }
+        }
+      }
+      ctx.textAlign = 'left';
+    }
+  }
+  requestAnimationFrame(window.loop);
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+// 1. ՍԱՀՄԱՆՈՒՄ ԵՆՔ CRAFTING TABLE-Ի ID-Ն ԵՎ ԳՈՒՅՆԵՐԸ
+window.CRAFTING_TABLE = 16;
+BLOCK_NAME[window.CRAFTING_TABLE] = 'Crafting Table';
+C_TOP[window.CRAFTING_TABLE] = '#b0885a';  
+C_DARK[window.CRAFTING_TABLE] = '#856643'; 
+BLOCK_HARD[window.CRAFTING_TABLE] = 1.0;   
+BLOCK_DROP[window.CRAFTING_TABLE] = window.CRAFTING_TABLE;
+
+// 2. CRAFTING ՀԱՄԱԿԱՐԳԻ ՓՈՓՈԽԱԿԱՆՆԵՐԸ
+window.showCraftingMenu = false;
+window.craftingRecipes = [
+  { resultId: PLANKS, resultCount: 4, needId: WOOD, needCount: 1, name: '4x Planks (Needs 1 Wood)' },
+  { resultId: window.CRAFTING_TABLE, resultCount: 1, needId: PLANKS, needCount: 4, name: '1x Crafting Table (Needs 4 Planks)' }
+];
+
+// 3. ԹԱՐՄԱՑՆՈՒՄ ԵՆՔ DRAWBLOCK-Ը (CRAFTING TABLE-Ի ՏԵՍՔԸ)
+const originalDrawBlock = drawBlock;
+drawBlock = function(bx, by, type) {
+  if (type === window.CRAFTING_TABLE) {
+    const sx = bx * TILE - cam.x;
+    const sy = by * TILE - cam.y;
+    if (sx > W + 2 || sy > H + 2 || sx + TILE < -2 || sy + TILE < -2) return;
+
+    ctx.save();
+    ctx.fillStyle = C_TOP[type]; ctx.fillRect(sx, sy, TILE, TILE);
+    ctx.fillStyle = C_DARK[type]; ctx.fillRect(sx, sy + TILE - 5, TILE, 5); ctx.fillRect(sx + TILE - 5, sy, 5, TILE - 5);
+    ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(sx, sy, TILE, 4); ctx.fillRect(sx, sy, 4, TILE);
+
+    // Խաչաձև գծեր վերևի մասում
+    ctx.fillStyle = '#5c4037';
+    ctx.fillRect(sx + 4, sy + 4, TILE - 8, 2); ctx.fillRect(sx + 4, sy + 12, TILE - 8, 2);
+    ctx.fillRect(sx + 10, sy + 4, 2, TILE - 8); ctx.fillRect(sx + 20, sy + 4, 2, TILE - 8);
+    // Գործիքների նշաններ կողքերից
+    ctx.fillStyle = '#4a3826'; ctx.fillRect(sx + 4, sy + 18, 5, 8); ctx.fillRect(sx + TILE - 9, sy + 18, 5, 6);
+    
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)'; ctx.lineWidth = 0.5; ctx.strokeRect(sx + .5, sy + .5, TILE - 1, TILE - 1);
+    ctx.restore();
+  } else {
+    originalDrawBlock(bx, by, type);
+  }
+};
+
+// 4. ՄԿՆԻԿԻ ՍԵՂՄՈՒՄՆԵՐԻ ԿԱՌԱՎԱՐՈՒՄ (Անվտանգ աջ և ձախ քլիքեր)
+window.addEventListener('mousedown', (e) => {
+  if (typeof gameState !== 'undefined' && gameState === 'playing') {
+    // Ճշգրիտ հաշվարկում ենք, թե որ բլոկի վրա է մկնիկը ( world[by][bx] )
+    const targetX = Math.floor((mx + cam.x) / TILE);
+    const targetY = Math.floor((my + cam.y) / TILE);
+    
+    if (targetX >= 0 && targetX < WORLD_W && targetY >= 0 && targetY < WORLD_H) {
+      const clickedBlock = world[targetY][targetX];
+
+      // ԱՋ ՔԼԻՔ՝ CRAFTING TABLE-Ի ՎՐԱ (Մենյուն բացել/փակելու համար)
+      if (e.button === 2 && clickedBlock === window.CRAFTING_TABLE) {
+        if (typeof inReach === 'function' && inReach(targetX, targetY)) {
+          e.preventDefault();
+          window.showCraftingMenu = !window.showCraftingMenu;
+          rmb = false; // Կանխում ենք հետևի ֆոնին բլոկ դնելը
+          return;
+        }
+      }
+    }
+
+    // ՁԱԽ ՔԼԻՔ՝ ԵՐԲ ՄԵՆՅՈՒՆ ԲԱՑ Է (Իրեր սարքելու համար)
+    if (window.showCraftingMenu && e.button === 0) {
+      let menuW = 300;
+      let menuX = W / 2 - menuW / 2;
+      let menuY = H / 2 - 80;
+
+      for (let i = 0; i < window.craftingRecipes.length; i++) {
+        let btnY = menuY + 40 + i * 35;
+        // Ստուգում ենք՝ արդյոք քլիքը ռեցեպտի կոճակի ներսում է
+        if (mx >= menuX + 10 && mx <= menuX + menuW - 10 && my >= btnY && my <= btnY + 28) {
+          e.preventDefault();
+          lmb = false; // Կանխում ենք հետևի բլոկները քանդելը
+          
+          let recipe = window.craftingRecipes[i];
+          // Փնտրում ենք անհրաժեշտ նյութը hotbar-ում
+          let foundSlot = hotbar.find(s => s.id === recipe.needId && s.n >= recipe.needCount);
+          
+          if (foundSlot) {
+            // Վերցնում ենք պահանջվող իրը
+            foundSlot.n -= recipe.needCount;
+            if (foundSlot.n <= 0) { foundSlot.id = 0; foundSlot.n = 0; }
+            
+            // Ավելացնում ենք պատրաստված նոր իրը hotbar-ում
+            let added = false;
+            for (let s of hotbar) {
+              if (s.id === recipe.resultId && s.n < 99) { s.n += recipe.resultCount; added = true; break; }
+            }
+            if (!added) {
+              for (let s of hotbar) {
+                if (!s.id) { s.id = recipe.resultId; s.n = recipe.resultCount; added = true; break; }
+              }
+            }
+            if (typeof playBreak === 'function') playBreak(); // Կրաֆտի ձայնային էֆեկտ
+          }
+          return;
+        }
+      }
+    }
+  }
+});
+
+// 5. ՓՈԽՈՒՄ ԵՆՔ ԲԼՈԿ ԴՆԵԼՈՒ ՖՈՒՆԿՑԻԱՆ, ՈՐՊԵՍԶԻ ՄԵՆՅՈՒԻ ԺԱՄԱՆԱԿ ԽԱՂԸ ՉԽԱԹԱՐՎԻ
+updatePlacing = function() {
+  if (window.showCraftingMenu) return; // Եթե մենյուն բաց է, բլոկ չի դրվում
+  if (!rmb || placeCd > 0) return;
+  const {bx, by} = targetBlock();
+  if (!inReach(bx, by) || bx < 0 || bx >= WORLD_W || by < 0 || by >= WORLD_H) return;
+  if (world[by][bx] !== AIR) return;
+  const pl = Math.floor(P.x / TILE), pr = Math.floor((P.x + P.w - 1) / TILE);
+  const pt = Math.floor(P.y / TILE), pb = Math.floor((P.y + P.h - 1) / TILE);
+  if (bx >= pl && bx <= pr && by >= pt && by <= pb) return;
+  const s = hotbar[selSlot];
+  if (!s.id) return;
+  world[by][bx] = s.id;
+  s.n--;
+  if (s.n <= 0) { s.id = 0; s.n = 0; }
+  placeCd = 10;
+};
+
+// 6. ՆԿԱՐՈՒՄ ԵՆՔ CRAFTING ՄԵՆՅՈՒՆ ԷԿՐԱՆԻՆ (DRAW_HUD)
+const originalDrawHUD = drawHUD;
+drawHUD = function() {
+  originalDrawHUD();
+
+  if (window.showCraftingMenu) {
+    let menuW = 300, menuH = 120;
+    let menuX = W / 2 - menuW / 2;
+    let menuY = H / 2 - menuH / 2 - 20;
+
+    // Մենյուի ֆոնը
+    ctx.fillStyle = 'rgba(25院, 30, 30, 0.95)';
+    ctx.fillStyle = '#2c2c2c'; ctx.fillRect(menuX, menuY, menuW, menuH);
+    ctx.strokeStyle = '#cf9a5a'; ctx.lineWidth = 3; ctx.strokeRect(menuX, menuY, menuW, menuH);
+
+    // Վերնագիր
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 14px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('CRAFTING TABLE', W / 2, menuY + 22);
+
+    // Ռեցեպտների ցուցադրում
+    for (let i = 0; i < window.craftingRecipes.length; i++) {
+      let recipe = window.craftingRecipes[i];
+      let btnY = menuY + 40 + i * 35;
+
+      // Hover էֆեկտ՝ երբ մկնիկը կոճակի վրա է
+      let isHover = (mx >= menuX + 10 && mx <= menuX + menuW - 10 && my >= btnY && my <= btnY + 28);
+      ctx.fillStyle = isHover ? '#555' : '#3a3a3a';
+      ctx.fillRect(menuX + 10, btnY, menuW - 20, 28);
+      ctx.strokeStyle = '#555'; ctx.strokeRect(menuX + 10, btnY, menuW - 20, 28);
+
+      ctx.fillStyle = '#eee'; ctx.font = '11px monospace'; ctx.textAlign = 'left';
+      ctx.fillText(recipe.name, menuX + 20, btnY + 18);
+    }
+    
+    ctx.fillStyle = '#aaa'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('(Right Click Crafting Table again to close)', W / 2, menuY + menuH - 10);
+  }
+};
+
+// 7. ՏԱԼԻՍ ԵՆՔ ՔԵԶ CRAFTING TABLE (Ավելացնում ենք 9-րդ սլոտում)
+hotbar[8] = { id: window.CRAFTING_TABLE, n: 10 };
+selSlot = 8; // Ավտոմատ ձեռքդ է տալիս Crafting Table-ը
+</script>

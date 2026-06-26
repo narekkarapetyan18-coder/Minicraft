@@ -1646,17 +1646,26 @@ C_DARK[GUNPOWDER]     = '#555555';
 BLOCK_HARD[GUNPOWDER] = Infinity;
 BLOCK_DROP[GUNPOWDER] = GUNPOWDER;
 
+const BONE = 23;
+BLOCK_NAME[BONE] = 'Bone';
+C_TOP[BONE]      = '#e8e0c8';
+C_DARK[BONE]     = '#b0a888';
+BLOCK_HARD[BONE] = Infinity;
+BLOCK_DROP[BONE] = BONE;
+
 const MOB_CFG = {
   cow:      { hp:10, w:30, h:24, spd:1.1, hostile:false, dropId:MEAT,        dropAmt:2, dmg:1 },
   pig:      { hp:8,  w:24, h:18, spd:1.3, hostile:false, dropId:PORK,        dropAmt:1, dmg:1 },
   zombie:   { hp:15, w:16, h:32, spd:1.0, hostile:true,  dropId:0,           dropAmt:0, dmg:1 },
   enderman: { hp:30, w:14, h:50, spd:0.9, hostile:true,  dropId:ENDER_PEARL, dropAmt:1, dmg:2 },
   creeper:  { hp:10, w:14, h:30, spd:0.8, hostile:true,  dropId:GUNPOWDER,   dropAmt:1, dmg:0 },
+  skeleton: { hp:12, w:14, h:32, spd:1.0, hostile:true,  dropId:BONE,        dropAmt:1, dmg:0 },
 };
 
 const mobs = [];
 window.mobHitCd    = 0;
 window.zombieAtkCd = 0;
+window.mobArrows   = [];
 
 function spawnMob(type, wx, wy) {
   const c = MOB_CFG[type];
@@ -1712,46 +1721,74 @@ function updateMobs(dt) {
     if (c.hostile) {
       const dx = (P.x + P.w/2) - (mob.x + mob.w/2);
       const dist = Math.abs(dx);
-      if (dist < TILE*14) {
-        mob.vx = Math.sign(dx) * c.spd;
-        mob.facing = Math.sign(dx) || 1;
-      } else {
-        mob.vx = 0;
-      }
-      if (mob.type === 'creeper') {
-        // Creeper fuse — explodes when close
-        const cd = Math.hypot((P.x+P.w/2)-(mob.x+mob.w/2), (P.y+P.h/2)-(mob.y+mob.h/2));
-        if (cd < TILE * 1) {
-          mob.fuse = (mob.fuse || 0) + 1;
-          mob.vx = 0; // freeze while fusing
-          if (Math.floor(mob.fuse / 6) % 2 === 1) mob.hitFlash = 2; // flash white
-          if (mob.fuse >= 55) {
-            mob.dead = true;
-            if (cd < TILE * 5) takeDamage(cd < TILE * 2 ? 5 : 3);
-            const ex = Math.floor((mob.x + mob.w/2) / TILE);
-            const ey = Math.floor((mob.y + mob.h/2) / TILE);
-            for (let edy = -4; edy <= 4; edy++) {
-              for (let edx = -4; edx <= 4; edx++) {
-                if (edx*edx + edy*edy > 20) continue;
-                const bx2 = ex+edx, by2 = ey+edy;
-                if (bx2 >= 0 && bx2 < WORLD_W && by2 >= 0 && by2 < WORLD_H
-                    && world[by2][bx2] !== AIR && world[by2][bx2] !== BEDROCK)
-                  world[by2][bx2] = AIR;
-              }
-            }
-            window.dmgFlash = 1;
-            playBreak();
+
+      if (mob.type === 'skeleton') {
+        // Skeleton: ranged attacker — keep distance and shoot arrows
+        const fullDist = Math.hypot(dx, (P.y+P.h/2)-(mob.y+mob.h/2));
+        if (fullDist < TILE * 14) {
+          mob.facing = Math.sign(dx) || 1;
+          if (fullDist < TILE * 3) {
+            mob.vx = -Math.sign(dx) * c.spd; // back away if too close
+          } else if (fullDist > TILE * 7) {
+            mob.vx = Math.sign(dx) * c.spd * 0.5; // close in if too far
+          } else {
+            mob.vx = 0; // hold position and shoot
+          }
+          mob.shotCd = (mob.shotCd || 80) - 1;
+          if (mob.shotCd <= 0 && fullDist < TILE * 12) {
+            mob.shotCd = 80;
+            const angle = Math.atan2((P.y+P.h/2)-(mob.y+mob.h/2), dx);
+            window.mobArrows.push({
+              x: mob.x + mob.w/2, y: mob.y + mob.h*0.4,
+              vx: Math.cos(angle) * 5.5, vy: Math.sin(angle) * 5.5,
+              dead: false
+            });
           }
         } else {
-          mob.fuse = 0;
+          mob.vx = 0;
         }
       } else {
-        // Attack player on contact
-        if (dist < mob.w/2 + P.w/2 + 4 &&
-            Math.abs((mob.y+mob.h/2)-(P.y+P.h/2)) < mob.h &&
-            window.zombieAtkCd <= 0) {
-          takeDamage(c.dmg || 1);
-          window.zombieAtkCd = 70;
+        if (dist < TILE*14) {
+          mob.vx = Math.sign(dx) * c.spd;
+          mob.facing = Math.sign(dx) || 1;
+        } else {
+          mob.vx = 0;
+        }
+        if (mob.type === 'creeper') {
+          // Creeper fuse — explodes when close
+          const cd = Math.hypot((P.x+P.w/2)-(mob.x+mob.w/2), (P.y+P.h/2)-(mob.y+mob.h/2));
+          if (cd < TILE * 1) {
+            mob.fuse = (mob.fuse || 0) + 1;
+            mob.vx = 0; // freeze while fusing
+            if (Math.floor(mob.fuse / 6) % 2 === 1) mob.hitFlash = 2; // flash white
+            if (mob.fuse >= 55) {
+              mob.dead = true;
+              if (cd < TILE * 5) takeDamage(cd < TILE * 2 ? 5 : 3);
+              const ex = Math.floor((mob.x + mob.w/2) / TILE);
+              const ey = Math.floor((mob.y + mob.h/2) / TILE);
+              for (let edy = -4; edy <= 4; edy++) {
+                for (let edx = -4; edx <= 4; edx++) {
+                  if (edx*edx + edy*edy > 20) continue;
+                  const bx2 = ex+edx, by2 = ey+edy;
+                  if (bx2 >= 0 && bx2 < WORLD_W && by2 >= 0 && by2 < WORLD_H
+                      && world[by2][bx2] !== AIR && world[by2][bx2] !== BEDROCK)
+                    world[by2][bx2] = AIR;
+                }
+              }
+              window.dmgFlash = 1;
+              playBreak();
+            }
+          } else {
+            mob.fuse = 0;
+          }
+        } else {
+          // Attack player on contact (zombie, enderman)
+          if (dist < mob.w/2 + P.w/2 + 4 &&
+              Math.abs((mob.y+mob.h/2)-(P.y+P.h/2)) < mob.h &&
+              window.zombieAtkCd <= 0) {
+            takeDamage(c.dmg || 1);
+            window.zombieAtkCd = 70;
+          }
         }
       }
     }
@@ -1787,6 +1824,25 @@ function updateMobs(dt) {
       drops.push({ x:m.x+m.w/2, y:m.y, vx:(Math.random()-.5)*3, vy:-4, id:c.dropId });
     mobs.splice(i, 1);
   }
+
+  // Update skeleton arrows
+  for (const arr of window.mobArrows) {
+    arr.vy += 0.25; // light gravity
+    arr.x  += arr.vx;
+    arr.y  += arr.vy;
+    // Hit player
+    if (!arr.dead &&
+        arr.x > P.x && arr.x < P.x+P.w &&
+        arr.y > P.y && arr.y < P.y+P.h) {
+      takeDamage(2);
+      arr.dead = true;
+    }
+    // Hit solid block
+    if (!arr.dead && solidAt(arr.x, arr.y)) arr.dead = true;
+    // Out of world
+    if (arr.y > WORLD_H * TILE) arr.dead = true;
+  }
+  window.mobArrows = window.mobArrows.filter(a => !a.dead);
 }
 
 function tryHitMob() {
@@ -2016,7 +2072,101 @@ function drawCreeper(sx, sy, mob) {
   ctx.restore();
 }
 
+function drawSkeleton(sx, sy, mob) {
+  const legSwing = Math.sin(mob.frame) * 0.4;
+  const legLen   = 13;
+  ctx.save();
+  ctx.translate(sx + mob.w/2, sy + mob.h);
+  ctx.scale(mob.facing, 1);
+  ctx.lineCap = 'square';
+
+  const BONE_C  = '#d0cbb8';
+  const BONE_D  = '#9a9580';
+
+  // Legs (thin bone strokes)
+  const lLegX = -3 + Math.sin( legSwing) * legLen;
+  const lLegY = -1 + Math.cos( legSwing) * legLen;
+  const rLegX =  3 + Math.sin(-legSwing) * legLen;
+  const rLegY = -1 + Math.cos(-legSwing) * legLen;
+  ctx.strokeStyle = BONE_C; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(-3, -1); ctx.lineTo(lLegX, lLegY); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo( 3, -1); ctx.lineTo(rLegX, rLegY); ctx.stroke();
+
+  // Thin body with ribcage lines
+  ctx.fillStyle = BONE_C;
+  ctx.fillRect(-4, -20, 8, 19);
+  ctx.strokeStyle = BONE_D; ctx.lineWidth = 1;
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath(); ctx.moveTo(-4, -18+i*4); ctx.lineTo(4, -18+i*4); ctx.stroke();
+  }
+  ctx.fillStyle = BONE_D; ctx.fillRect(3, -20, 1, 19); // side shade
+
+  // Back arm
+  ctx.strokeStyle = BONE_C; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(-4, -18); ctx.lineTo(-11, -10); ctx.stroke();
+
+  // Front arm (holding bow — angled forward)
+  ctx.beginPath(); ctx.moveTo(4, -18); ctx.lineTo(13, -14); ctx.stroke();
+
+  // Bow held in front hand
+  ctx.strokeStyle = '#6a3e10'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(15, -16, 6, -Math.PI*0.65, Math.PI*0.65); ctx.stroke();
+  // Bowstring
+  ctx.strokeStyle = '#c8c870'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(15, -22); ctx.lineTo(15, -10); ctx.stroke();
+
+  // Head (skull block)
+  ctx.fillStyle = BONE_C;
+  ctx.fillRect(-5, -31, 10, 11);
+  ctx.fillStyle = BONE_D; ctx.fillRect(4, -31, 1, 11);
+
+  // Hollow dark eye sockets
+  ctx.fillStyle = '#111';
+  ctx.fillRect(-4, -29, 3, 3);
+  ctx.fillRect( 1, -29, 3, 3);
+
+  // Nose cavity
+  ctx.fillStyle = '#2a2a2a';
+  ctx.fillRect(-1, -26, 2, 2);
+
+  // Skull teeth (grin)
+  ctx.fillStyle = BONE_C;
+  ctx.fillRect(-3, -23, 1, 2);
+  ctx.fillRect(-1, -23, 1, 2);
+  ctx.fillRect( 1, -23, 1, 2);
+  ctx.fillRect( 3, -23, 1, 2);
+  ctx.fillStyle = '#111';
+  ctx.fillRect(-2, -23, 1, 2);
+  ctx.fillRect( 0, -23, 1, 2);
+  ctx.fillRect( 2, -23, 1, 2);
+
+  ctx.restore();
+}
+
+function drawArrows() {
+  ctx.save();
+  for (const arr of window.mobArrows) {
+    const ax = arr.x - cam.x, ay = arr.y - cam.y;
+    ctx.save();
+    ctx.translate(ax, ay);
+    ctx.rotate(Math.atan2(arr.vy, arr.vx));
+    // Shaft
+    ctx.fillStyle = '#8b5e20';
+    ctx.fillRect(-7, -1, 14, 2);
+    // Arrowhead (darker grey)
+    ctx.fillStyle = '#778888';
+    ctx.fillRect(7, -2, 5, 4);
+    // Fletching
+    ctx.fillStyle = '#ddddbb';
+    ctx.fillRect(-10, -3, 4, 2);
+    ctx.fillRect(-10,  1, 4, 2);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
 function drawMobs() {
+  drawArrows();
   for (const mob of mobs) {
     if (mob.dead) continue;
     const sx = Math.round(mob.x - cam.x), sy = Math.round(mob.y - cam.y);
@@ -2024,10 +2174,11 @@ function drawMobs() {
     ctx.save();
     if (mob.hitFlash > 0) { ctx.filter='brightness(4)'; ctx.globalAlpha = 0.6+Math.sin(mob.hitFlash)*0.4; }
     if (mob.type==='cow')    drawCow(sx, sy, mob);
-    else if (mob.type==='pig')    drawPig(sx, sy, mob);
+    else if (mob.type==='pig')      drawPig(sx, sy, mob);
     else if (mob.type==='zombie')   drawZombie(sx, sy, mob);
     else if (mob.type==='enderman') drawEnderman(sx, sy, mob);
     else if (mob.type==='creeper')  drawCreeper(sx, sy, mob);
+    else if (mob.type==='skeleton') drawSkeleton(sx, sy, mob);
     ctx.restore();
     // HP bar (only when damaged)
     if (mob.hp < mob.maxHp) {
@@ -2071,7 +2222,7 @@ function nightSpawn() {
   const isNight = window.gameTime >= 14000 && window.gameTime < 21000;
   if (!isNight) return;
 
-  const hostileCount = mobs.filter(m => m.type === 'zombie' || m.type === 'enderman' || m.type === 'creeper').length;
+  const hostileCount = mobs.filter(m => MOB_CFG[m.type] && MOB_CFG[m.type].hostile).length;
   if (hostileCount >= MAX_ZOMBIES) return;
 
   window.nightSpawnTimer++;
@@ -2089,9 +2240,9 @@ function nightSpawn() {
       if (world[y][bx] !== AIR) { surf = y; break; }
     }
     if (surf < 2) continue;
-    // pick a hostile type: 60% zombie, 25% creeper, 15% enderman
+    // pick a hostile type: 45% zombie, 25% skeleton, 20% creeper, 10% enderman
     const r = Math.random();
-    const spawnType = r < 0.60 ? 'zombie' : r < 0.85 ? 'creeper' : 'enderman';
+    const spawnType = r < 0.45 ? 'zombie' : r < 0.70 ? 'skeleton' : r < 0.90 ? 'creeper' : 'enderman';
     spawnMob(spawnType, bx * TILE, (surf - 1) * TILE - MOB_CFG[spawnType].h);
     break;
   }

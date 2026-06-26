@@ -1,19 +1,18 @@
 <title>MiniCraft</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #1a1a2e; display: flex; flex-direction: column; align-items: center;
-         justify-content: center; min-height: 100vh; font-family: monospace; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: monospace; }
   canvas { display: block; cursor: crosshair; }
   canvas.title-mode { cursor: default; }
-  #info { color: #777; font-size: 11px; margin-top: 6px; letter-spacing: 1px; }
 </style>
 
-<canvas id="c" width="900" height="500"></canvas>
-<div id="info">WASD: move &nbsp;·&nbsp; Space: jump &nbsp;·&nbsp; Left click: mine &nbsp;·&nbsp; Right click: place &nbsp;·&nbsp; 1-9/scroll: hotbar &nbsp;·&nbsp; Q: drop &nbsp;·&nbsp; 🪓 Mine any wood log to fell the whole tree!</div>
+<canvas id="c"></canvas>
 
 <script>
 const canvas = document.getElementById('c');
 const ctx    = canvas.getContext('2d');
+canvas.width  = window.innerWidth;
+canvas.height = window.innerHeight;
 const W = canvas.width, H = canvas.height;
 
 const TILE    = 32;
@@ -111,7 +110,7 @@ const cam = {x:0, y:0};
 const hotbar = [
   {id:GRASS,n:64},{id:DIRT,n:64},{id:STONE,n:64},
   {id:WOOD,n:64},{id:PLANKS,n:64},{id:SAND,n:64},
-  {id:LEAVES,n:64},{id:0,n:0},{id:0,n:0},
+  {id:0,n:0},{id:0,n:0},{id:0,n:0},
 ];
 let selSlot = 0;
 
@@ -713,16 +712,22 @@ drawPlayer = function() {
   ctx.translate(sx, sy);
   ctx.scale(P.facing, 1);
   ctx.lineCap='round';
-  const leg=Math.sin(P.frame)*11;
   const arm=Math.sin(P.frame)*13;
 
-  // legs
+  // legs — pendulum swing so feet stay near ground level
+  const swing  = Math.sin(P.frame) * 0.45; // max ~26 degrees
+  const legLen = 9;
+  const lLegX = -4 + Math.sin( swing) * legLen;
+  const lLegY = -4 + Math.cos( swing) * legLen;
+  const rLegX =  4 + Math.sin(-swing) * legLen;
+  const rLegY = -4 + Math.cos(-swing) * legLen;
+
   ctx.strokeStyle='#1a0a2a'; ctx.lineWidth=5;
-  ctx.beginPath(); ctx.moveTo(-4,-4); ctx.lineTo(-4+leg*0.4,-0+leg); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(4,-4);  ctx.lineTo(4-leg*0.4,0-leg); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-4,-4); ctx.lineTo(lLegX, lLegY); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo( 4,-4); ctx.lineTo(rLegX, rLegY); ctx.stroke();
   ctx.strokeStyle='#6a20c0'; ctx.lineWidth=1.5;
-  ctx.beginPath(); ctx.moveTo(-4,-4); ctx.lineTo(-4+leg*0.4,-0+leg); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(4,-4);  ctx.lineTo(4-leg*0.4,0-leg); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-4,-4); ctx.lineTo(lLegX, lLegY); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo( 4,-4); ctx.lineTo(rLegX, rLegY); ctx.stroke();
 
   // body
   ctx.fillStyle='#0d0818'; ctx.fillRect(-8,-24,16,20);
@@ -1262,7 +1267,7 @@ drawHUD = function() {
   originalDrawHUD();
 
   if (window.showCraftingMenu) {
-    let menuW = 300, menuH = 120;
+    let menuW = 300, menuH = 160;
     let menuX = W / 2 - menuW / 2;
     let menuY = H / 2 - menuH / 2 - 20;
 
@@ -1328,9 +1333,9 @@ function eatFood() {
   window.eatAnim = 25;
 }
 
-// F key = eat
+// F or H key = eat
 window.addEventListener('keydown', e => {
-  if ((e.key === 'f' || e.key === 'F') && gameState === 'playing') {
+  if ((e.key === 'f' || e.key === 'F' || e.key === 'h' || e.key === 'H') && gameState === 'playing') {
     eatFood(); e.preventDefault();
   }
 });
@@ -1572,6 +1577,11 @@ eatFood = function() {
   const r = FOOD_RESTORE[s.id];
   if (!r) return;
   P.hunger = Math.min(P.maxHunger, P.hunger + r);
+  // Any non-apple food restores +1 HP
+  if (s.id !== APPLE) {
+    P.hp = Math.min(P.maxHp, P.hp + 1);
+    window.dmgFlash = 0;
+  }
   s.n--;
   if (s.n <= 0) { s.id = 0; s.n = 0; }
   window.eatCd   = 25;
@@ -1608,6 +1618,583 @@ function drawMeatIcon(ctx, x, y, size) {
     }
   }
 }
+
+// ══════════════════════════════════════════════════════
+// MOB SYSTEM
+// ══════════════════════════════════════════════════════
+const PORK = 19;
+BLOCK_NAME[PORK] = 'Raw Pork';
+C_TOP[PORK]      = '#F4A0A0';
+C_DARK[PORK]     = '#D47080';
+BLOCK_HARD[PORK] = Infinity;
+BLOCK_DROP[PORK] = PORK;
+FOOD_RESTORE[PORK] = 1;
+
+
+const ENDER_PEARL = 21;
+BLOCK_NAME[ENDER_PEARL] = 'Ender Pearl';
+C_TOP[ENDER_PEARL]      = '#5533cc';
+C_DARK[ENDER_PEARL]     = '#3311aa';
+BLOCK_HARD[ENDER_PEARL] = Infinity;
+BLOCK_DROP[ENDER_PEARL] = ENDER_PEARL;
+
+const GUNPOWDER = 22;
+BLOCK_NAME[GUNPOWDER] = 'Gunpowder';
+C_TOP[GUNPOWDER]      = '#888888';
+C_DARK[GUNPOWDER]     = '#555555';
+BLOCK_HARD[GUNPOWDER] = Infinity;
+BLOCK_DROP[GUNPOWDER] = GUNPOWDER;
+
+const MOB_CFG = {
+  cow:      { hp:10, w:30, h:24, spd:1.1, hostile:false, dropId:MEAT,        dropAmt:2, dmg:1 },
+  pig:      { hp:8,  w:24, h:18, spd:1.3, hostile:false, dropId:PORK,        dropAmt:1, dmg:1 },
+  zombie:   { hp:15, w:16, h:32, spd:1.0, hostile:true,  dropId:0,           dropAmt:0, dmg:1 },
+  enderman: { hp:30, w:14, h:50, spd:0.9, hostile:true,  dropId:ENDER_PEARL, dropAmt:1, dmg:2 },
+  creeper:  { hp:10, w:14, h:30, spd:0.8, hostile:true,  dropId:GUNPOWDER,   dropAmt:1, dmg:0 },
+};
+
+const mobs = [];
+window.mobHitCd    = 0;
+window.zombieAtkCd = 0;
+
+function spawnMob(type, wx, wy) {
+  const c = MOB_CFG[type];
+  mobs.push({ x:wx, y:wy, vx:0, vy:0, w:c.w, h:c.h,
+    hp:c.hp, maxHp:c.hp, type, onGround:false,
+    facing:1, frame:0, aiTimer:Math.floor(Math.random()*60),
+    hitFlash:0, dead:false });
+}
+
+function spawnInitialMobs() {
+  const cx = Math.floor(WORLD_W / 2);
+  let passive = 0, hostile = 0;
+  for (let attempt = 0; attempt < 200 && (passive < 8 || hostile < 5); attempt++) {
+    const bx = Math.max(3, Math.min(WORLD_W-3, cx + Math.floor((Math.random()-0.5)*120)));
+    let surf = -1;
+    for (let y = 0; y < WORLD_H; y++) { if (world[y][bx] !== AIR) { surf = y; break; } }
+    if (surf < 2) continue;
+    if (passive < 8) {
+      const type = Math.random() < 0.55 ? 'cow' : 'pig';
+      const c = MOB_CFG[type];
+      spawnMob(type, bx*TILE, (surf-2)*TILE - c.h + TILE);
+      passive++;
+    } else if (hostile < 5) {
+      spawnMob('zombie', bx*TILE, (surf-2)*TILE);
+      hostile++;
+    }
+  }
+}
+
+function updateMobs(dt) {
+  if (window.mobHitCd > 0)    window.mobHitCd--;
+  if (window.zombieAtkCd > 0) window.zombieAtkCd--;
+
+  for (const mob of mobs) {
+    if (mob.dead) continue;
+    if (mob.hitFlash > 0) mob.hitFlash--;
+
+    const c = MOB_CFG[mob.type];
+
+    // AI tick
+    mob.aiTimer--;
+    if (mob.aiTimer <= 0) {
+      mob.aiTimer = 50 + Math.floor(Math.random()*80);
+      if (!c.hostile) {
+        const r = Math.random();
+        if      (r < 0.3) mob.vx = 0;
+        else if (r < 0.65){ mob.vx = -c.spd; mob.facing = -1; }
+        else               { mob.vx =  c.spd; mob.facing =  1; }
+      }
+    }
+
+    // Hostile: continuously chase player
+    if (c.hostile) {
+      const dx = (P.x + P.w/2) - (mob.x + mob.w/2);
+      const dist = Math.abs(dx);
+      if (dist < TILE*14) {
+        mob.vx = Math.sign(dx) * c.spd;
+        mob.facing = Math.sign(dx) || 1;
+      } else {
+        mob.vx = 0;
+      }
+      if (mob.type === 'creeper') {
+        // Creeper fuse — explodes when close
+        const cd = Math.hypot((P.x+P.w/2)-(mob.x+mob.w/2), (P.y+P.h/2)-(mob.y+mob.h/2));
+        if (cd < TILE * 1) {
+          mob.fuse = (mob.fuse || 0) + 1;
+          mob.vx = 0; // freeze while fusing
+          if (Math.floor(mob.fuse / 6) % 2 === 1) mob.hitFlash = 2; // flash white
+          if (mob.fuse >= 55) {
+            mob.dead = true;
+            if (cd < TILE * 5) takeDamage(cd < TILE * 2 ? 5 : 3);
+            const ex = Math.floor((mob.x + mob.w/2) / TILE);
+            const ey = Math.floor((mob.y + mob.h/2) / TILE);
+            for (let edy = -4; edy <= 4; edy++) {
+              for (let edx = -4; edx <= 4; edx++) {
+                if (edx*edx + edy*edy > 20) continue;
+                const bx2 = ex+edx, by2 = ey+edy;
+                if (bx2 >= 0 && bx2 < WORLD_W && by2 >= 0 && by2 < WORLD_H
+                    && world[by2][bx2] !== AIR && world[by2][bx2] !== BEDROCK)
+                  world[by2][bx2] = AIR;
+              }
+            }
+            window.dmgFlash = 1;
+            playBreak();
+          }
+        } else {
+          mob.fuse = 0;
+        }
+      } else {
+        // Attack player on contact
+        if (dist < mob.w/2 + P.w/2 + 4 &&
+            Math.abs((mob.y+mob.h/2)-(P.y+P.h/2)) < mob.h &&
+            window.zombieAtkCd <= 0) {
+          takeDamage(c.dmg || 1);
+          window.zombieAtkCd = 70;
+        }
+      }
+    }
+
+    // Jump over walls
+    if (mob.onGround && mob.vx !== 0) {
+      const fx = mob.x + (mob.vx > 0 ? mob.w+2 : -2);
+      if (solidAt(fx, mob.y + mob.h/2)) { mob.vy = -9.5; mob.onGround = false; }
+    }
+
+    // Gravity + physics (mirrors player)
+    mob.vy = Math.min(mob.vy + GRAVITY, 18);
+    mob.x += mob.vx;
+    mob.x = Math.max(0, Math.min(mob.x, WORLD_W*TILE - mob.w));
+    if (mob.vx < 0 && (solidAt(mob.x, mob.y+2)||solidAt(mob.x, mob.y+mob.h-2)))
+      { mob.x=Math.ceil(mob.x/TILE)*TILE; mob.vx=0; }
+    if (mob.vx > 0 && (solidAt(mob.x+mob.w, mob.y+2)||solidAt(mob.x+mob.w, mob.y+mob.h-2)))
+      { mob.x=Math.floor((mob.x+mob.w)/TILE)*TILE-mob.w; mob.vx=0; }
+    mob.y += mob.vy; mob.onGround = false;
+    if (mob.vy > 0 && (solidAt(mob.x+2,mob.y+mob.h)||solidAt(mob.x+mob.w-2,mob.y+mob.h)))
+      { mob.y=Math.floor((mob.y+mob.h)/TILE)*TILE-mob.h; mob.vy=0; mob.onGround=true; }
+    if (mob.vy < 0 && (solidAt(mob.x+2,mob.y)||solidAt(mob.x+mob.w-2,mob.y)))
+      { mob.y=Math.ceil(mob.y/TILE)*TILE; mob.vy=0; }
+    if (mob.y > WORLD_H*TILE) mob.dead = true;
+    if (mob.onGround && Math.abs(mob.vx) > 0.2) mob.frame += 0.12;
+  }
+
+  // Remove dead mobs and spawn drops
+  for (let i = mobs.length-1; i >= 0; i--) {
+    if (!mobs[i].dead) continue;
+    const m = mobs[i], c = MOB_CFG[m.type];
+    for (let k = 0; k < c.dropAmt; k++)
+      drops.push({ x:m.x+m.w/2, y:m.y, vx:(Math.random()-.5)*3, vy:-4, id:c.dropId });
+    mobs.splice(i, 1);
+  }
+}
+
+function tryHitMob() {
+  if (!lmb || window.mobHitCd > 0) return false;
+  const wx = mx + cam.x, wy = my + cam.y;
+  for (const mob of mobs) {
+    if (mob.dead) continue;
+    if (wx < mob.x || wx > mob.x+mob.w || wy < mob.y || wy > mob.y+mob.h) continue;
+    const dist = Math.hypot(mob.x+mob.w/2-(P.x+P.w/2), mob.y+mob.h/2-(P.y+P.h/2));
+    if (dist > TILE*5) continue;
+    mob.hp -= 2;
+    mob.hitFlash = 10;
+    mob.vx = (mob.x > P.x ? 3.5 : -3.5);
+    mob.vy = -5;
+    window.mobHitCd = 18;
+    playBreak();
+    if (mob.hp <= 0) mob.dead = true;
+    return true;
+  }
+  return false;
+}
+
+// Drawing helpers
+function drawCow(sx, sy, mob) {
+  const leg = Math.sin(mob.frame) * 4;
+  ctx.save();
+  ctx.translate(sx + mob.w/2, sy + mob.h);
+  ctx.scale(mob.facing, 1);
+  // legs
+  ctx.fillStyle = '#5a3a18';
+  ctx.fillRect(-11,-8,5,8+leg); ctx.fillRect(-4,-8,5,8-leg);
+  ctx.fillRect(2, -8,5,8-leg); ctx.fillRect(8, -8,5,8+leg);
+  // body
+  ctx.fillStyle = '#8B5E3C'; ctx.fillRect(-13,-20,26,14);
+  ctx.fillStyle = '#d0c0a0'; ctx.fillRect(-6,-18,12,8); // belly
+  // head
+  ctx.fillStyle = '#8B5E3C'; ctx.fillRect(10,-26,14,12);
+  ctx.fillStyle = '#a07050'; ctx.fillRect(21,-22,4,5); // snout
+  ctx.fillStyle = '#111'; ctx.fillRect(13,-24,3,3); // eye
+  // horns
+  ctx.fillStyle = '#eee';
+  ctx.fillRect(11,-29,3,5); ctx.fillRect(17,-29,3,5);
+  ctx.restore();
+}
+
+function drawPig(sx, sy, mob) {
+  const leg = Math.sin(mob.frame) * 3;
+  ctx.save();
+  ctx.translate(sx + mob.w/2, sy + mob.h);
+  ctx.scale(mob.facing, 1);
+  ctx.fillStyle = '#D47080';
+  ctx.fillRect(-8,-6,4,6+leg); ctx.fillRect(-2,-6,4,6-leg);
+  ctx.fillRect(3,-6,4,6-leg); ctx.fillRect(7,-6,4,6+leg);
+  ctx.fillStyle = '#F4A0A0'; ctx.fillRect(-10,-16,20,12);
+  ctx.fillRect(7,-20,12,10); // head
+  ctx.fillStyle = '#e08080'; ctx.fillRect(16,-18,4,4); // snout
+  ctx.fillStyle = '#905050';
+  ctx.fillRect(17,-17,1,2); ctx.fillRect(19,-17,1,2); // nostrils
+  ctx.fillStyle = '#111'; ctx.fillRect(9,-18,3,3); // eye
+  ctx.restore();
+}
+
+function drawZombie(sx, sy, mob) {
+  const legSwing = Math.sin(mob.frame) * 5;
+  ctx.save();
+  ctx.translate(sx + mob.w/2, sy + mob.h);
+  ctx.scale(mob.facing, 1);
+
+  const SKIN  = '#70b030', SKIN_D  = '#4a7a20';
+  const SHIRT = '#3a6fa0', SHIRT_D = '#284870';
+  const PANTS = '#3030a8', PANTS_D = '#1e1e78';
+
+  // Left leg
+  ctx.fillStyle = PANTS;
+  ctx.fillRect(-5, -11 + legSwing, 4, 11);
+  ctx.fillStyle = PANTS_D;
+  ctx.fillRect(-2, -11 + legSwing, 1, 11);
+
+  // Right leg
+  ctx.fillStyle = PANTS;
+  ctx.fillRect(1, -11 - legSwing, 4, 11);
+  ctx.fillStyle = PANTS_D;
+  ctx.fillRect(4, -11 - legSwing, 1, 11);
+
+  // Body — teal/blue shirt
+  ctx.fillStyle = SHIRT;
+  ctx.fillRect(-6, -21, 12, 10);
+  ctx.fillStyle = SHIRT_D;
+  ctx.fillRect(5, -21, 1, 10);
+
+  // Front arm outstretched forward (zombie pose)
+  ctx.fillStyle = SKIN;
+  ctx.fillRect(6, -23, 11, 4);
+  ctx.fillStyle = SKIN_D;
+  ctx.fillRect(6, -20, 11, 1);
+
+  // Back arm (also forward, darker)
+  ctx.fillStyle = SKIN_D;
+  ctx.fillRect(-17, -23, 11, 4);
+
+  // Head — green skin
+  ctx.fillStyle = SKIN;
+  ctx.fillRect(-5, -32, 10, 11);
+  ctx.fillStyle = SKIN_D;
+  ctx.fillRect(4, -32, 1, 11);
+  ctx.fillStyle = '#88c840';
+  ctx.fillRect(-5, -32, 10, 2);
+
+  // Eyes
+  ctx.fillStyle = '#111';
+  ctx.fillRect(-3, -29, 3, 2);
+  ctx.fillRect(1,  -29, 3, 2);
+  ctx.fillStyle = '#e03030';
+  ctx.fillRect(-3, -29, 2, 1);
+  ctx.fillRect(2,  -29, 2, 1);
+
+  // Mouth with teeth
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(-2, -26, 5, 2);
+  ctx.fillStyle = '#dddddd';
+  ctx.fillRect(-2, -26, 1, 1);
+  ctx.fillRect(0,  -26, 1, 1);
+  ctx.fillRect(2,  -26, 1, 1);
+
+  ctx.restore();
+}
+
+function drawEnderman(sx, sy, mob) {
+  const leg = Math.sin(mob.frame) * 6;
+  ctx.save();
+  ctx.translate(sx + mob.w/2, sy + mob.h);
+  ctx.scale(mob.facing, 1);
+
+  const BLK  = '#0d0d12';
+  const BLK2 = '#060608';
+
+  // Long thin legs
+  ctx.fillStyle = BLK;
+  ctx.fillRect(-4, -24, 3, 24 + leg);
+  ctx.fillRect( 1, -24, 3, 24 - leg);
+
+  // Narrow body
+  ctx.fillStyle = BLK;
+  ctx.fillRect(-4, -40, 8, 16);
+  ctx.fillStyle = BLK2;
+  ctx.fillRect( 3, -40, 1, 16);
+
+  // Long thin arms hanging at sides
+  ctx.fillStyle = BLK;
+  ctx.fillRect(-7, -39, 2, 28 - leg);
+  ctx.fillRect( 5, -39, 2, 28 + leg);
+
+  // Small square head
+  ctx.fillStyle = BLK;
+  ctx.fillRect(-5, -50, 10, 10);
+
+  // Purple glowing eyes
+  ctx.shadowColor = '#aa00ff';
+  ctx.shadowBlur = 10;
+  ctx.fillStyle = '#cc44ff';
+  ctx.fillRect(-3, -47, 2, 2);
+  ctx.fillRect( 1, -47, 2, 2);
+  ctx.shadowBlur = 0;
+
+  // Purple particle dots on body
+  ctx.fillStyle = '#7700bb';
+  ctx.fillRect(-1, -36, 2, 2);
+  ctx.fillRect(-2, -30, 2, 2);
+  ctx.fillRect( 0, -25, 2, 2);
+
+  ctx.restore();
+}
+
+function drawCreeper(sx, sy, mob) {
+  const legSwing = Math.sin(mob.frame) * 4;
+  const fusing   = (mob.fuse || 0) > 0;
+  const flash    = fusing && Math.floor((mob.fuse || 0) / 6) % 2 === 1;
+  ctx.save();
+  ctx.translate(sx + mob.w/2, sy + mob.h);
+  ctx.scale(mob.facing, 1);
+
+  const G1 = flash ? '#ffffff' : '#43a043';
+  const G2 = flash ? '#cccccc' : '#2a6a2a';
+  const G3 = flash ? '#eeeeee' : '#347034';
+
+  // 4 short legs (2 shown alternating)
+  ctx.fillStyle = G2;
+  ctx.fillRect(-5, -8 + legSwing, 4, 8);
+  ctx.fillRect( 1, -8 - legSwing, 4, 8);
+  ctx.fillStyle = G3;
+  ctx.fillRect(-2, -8 + legSwing, 1, 8);
+  ctx.fillRect( 4, -8 - legSwing, 1, 8);
+
+  // Body
+  ctx.fillStyle = G1;
+  ctx.fillRect(-6, -22, 12, 14);
+  // Mossy dark patches
+  ctx.fillStyle = G2;
+  ctx.fillRect(-6, -22, 3, 4);
+  ctx.fillRect( 2, -19, 4, 5);
+  ctx.fillRect(-3, -14, 5, 4);
+  // Right shade
+  ctx.fillStyle = G3;
+  ctx.fillRect( 5, -22, 1, 14);
+
+  // Head
+  ctx.fillStyle = G1;
+  ctx.fillRect(-6, -32, 12, 10);
+  ctx.fillStyle = G2;
+  ctx.fillRect(-6, -32, 4, 3);
+  ctx.fillRect( 2, -30, 3, 4);
+  ctx.fillStyle = G3;
+  ctx.fillRect( 5, -32, 1, 10);
+
+  // Iconic creeper face (no face when fully flashing)
+  if (!flash) {
+    ctx.fillStyle = '#111';
+    // Eyes
+    ctx.fillRect(-4, -30, 3, 3);
+    ctx.fillRect( 1, -30, 3, 3);
+    // Frown: two top blocks, center drops down
+    ctx.fillRect(-3, -26, 2, 2);
+    ctx.fillRect( 1, -26, 2, 2);
+    ctx.fillRect(-1, -25, 2, 3);
+  }
+
+  ctx.restore();
+}
+
+function drawMobs() {
+  for (const mob of mobs) {
+    if (mob.dead) continue;
+    const sx = Math.round(mob.x - cam.x), sy = Math.round(mob.y - cam.y);
+    if (sx > W+50||sy > H+50||sx+mob.w < -50||sy+mob.h < -50) continue;
+    ctx.save();
+    if (mob.hitFlash > 0) { ctx.filter='brightness(4)'; ctx.globalAlpha = 0.6+Math.sin(mob.hitFlash)*0.4; }
+    if (mob.type==='cow')    drawCow(sx, sy, mob);
+    else if (mob.type==='pig')    drawPig(sx, sy, mob);
+    else if (mob.type==='zombie')   drawZombie(sx, sy, mob);
+    else if (mob.type==='enderman') drawEnderman(sx, sy, mob);
+    else if (mob.type==='creeper')  drawCreeper(sx, sy, mob);
+    ctx.restore();
+    // HP bar (only when damaged)
+    if (mob.hp < mob.maxHp) {
+      const bw=mob.w+8, bx=sx-4, by=sy-11;
+      ctx.fillStyle='#400'; ctx.fillRect(bx,by,bw,5);
+      ctx.fillStyle='#0d0'; ctx.fillRect(bx,by,Math.round(bw*mob.hp/mob.maxHp),5);
+      ctx.strokeStyle='#000'; ctx.lineWidth=1; ctx.strokeRect(bx,by,bw,5);
+    }
+  }
+}
+
+// Intercept mining to allow hitting mobs
+const _mineBeforeMobs = updateMining;
+updateMining = function(dt) {
+  if (tryHitMob()) return;
+  _mineBeforeMobs(dt);
+};
+
+// Hook updateDrops (runs in physics phase) to also update mobs
+const _dropsUpdateMobs = updateDrops;
+updateDrops = function() {
+  updateMobs();
+  _dropsUpdateMobs();
+};
+
+// Hook drawDrops (runs in draw phase) to also draw mobs
+const _drawDropsMobs = drawDrops;
+drawDrops = function() {
+  _drawDropsMobs();
+  drawMobs();
+};
+
+// Boost meat food restore to make combat rewarding
+FOOD_RESTORE[MEAT] = 4;
+
+// Night spawning
+window.nightSpawnTimer = 0;
+const MAX_ZOMBIES = 12;
+
+function nightSpawn() {
+  const isNight = window.gameTime >= 14000 && window.gameTime < 21000;
+  if (!isNight) return;
+
+  const hostileCount = mobs.filter(m => m.type === 'zombie' || m.type === 'enderman' || m.type === 'creeper').length;
+  if (hostileCount >= MAX_ZOMBIES) return;
+
+  window.nightSpawnTimer++;
+  if (window.nightSpawnTimer < 180) return; // try every ~3 seconds
+  window.nightSpawnTimer = 0;
+
+  // Pick a random surface tile 15-40 tiles away from the player
+  const px = Math.floor((P.x + P.w / 2) / TILE);
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const bx = Math.max(2, Math.min(WORLD_W - 2,
+      px + side * (15 + Math.floor(Math.random() * 25))));
+    let surf = -1;
+    for (let y = 0; y < WORLD_H; y++) {
+      if (world[y][bx] !== AIR) { surf = y; break; }
+    }
+    if (surf < 2) continue;
+    // pick a hostile type: 60% zombie, 25% creeper, 15% enderman
+    const r = Math.random();
+    const spawnType = r < 0.60 ? 'zombie' : r < 0.85 ? 'creeper' : 'enderman';
+    spawnMob(spawnType, bx * TILE, (surf - 1) * TILE - MOB_CFG[spawnType].h);
+    break;
+  }
+}
+
+// Hook nightSpawn into the physics update
+const _nightSpawnPhysics = updatePhysics;
+updatePhysics = function() {
+  nightSpawn();
+  _nightSpawnPhysics();
+};
+
+// Spawn mobs after world is ready
+spawnInitialMobs();
+
+// ══════════════════════════════════════════════════════
+// BED SYSTEM
+// ══════════════════════════════════════════════════════
+const BED = 20;
+BLOCK_NAME[BED] = 'Bed';
+C_TOP[BED]  = '#cc3333';
+C_DARK[BED] = '#882222';
+BLOCK_HARD[BED] = 0.8;
+BLOCK_DROP[BED] = BED;
+
+// Add bed to crafting recipes
+window.craftingRecipes.push(
+  { resultId: BED, resultCount: 1, needId: PLANKS, needCount: 3, name: '1x Bed (Cost: 3 Planks)' }
+);
+
+// Draw bed block
+const _drawBlockBeforeBed = drawBlock;
+drawBlock = function(bx, by, type) {
+  if (type !== BED) { _drawBlockBeforeBed(bx, by, type); return; }
+  const sx = bx * TILE - cam.x, sy = by * TILE - cam.y;
+  if (sx > W+2 || sy > H+2 || sx+TILE < -2 || sy+TILE < -2) return;
+  // Frame / wooden base
+  ctx.fillStyle = '#a07040'; ctx.fillRect(sx, sy, TILE, TILE);
+  // Red blanket
+  ctx.fillStyle = '#cc3333'; ctx.fillRect(sx+3, sy+3, TILE-6, TILE-10);
+  // White pillow
+  ctx.fillStyle = '#f0f0f0'; ctx.fillRect(sx+4, sy+TILE-11, 10, 7);
+  ctx.fillStyle = '#d8d8d8'; ctx.fillRect(sx+5, sy+TILE-10, 8, 5);
+  // Blanket folds
+  ctx.fillStyle = '#aa2020';
+  ctx.fillRect(sx+3, sy+10, TILE-6, 2);
+  ctx.fillRect(sx+3, sy+16, TILE-6, 2);
+  // Border
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = 1;
+  ctx.strokeRect(sx+0.5, sy+0.5, TILE-1, TILE-1);
+};
+
+// Sleeping state
+window.sleeping    = false;
+window.sleepTimer  = 0;
+
+// Right-click on bed → sleep
+const _bedPlacing = updatePlacing;
+updatePlacing = function() {
+  if (!window.sleeping && rmb && placeCd === 0) {
+    const { bx, by } = targetBlock();
+    if (inReach(bx, by) && bx >= 0 && bx < WORLD_W && by >= 0 && by < WORLD_H) {
+      if (world[by][bx] === BED) {
+        window.sleeping   = true;
+        window.sleepTimer = 80;
+        placeCd = 20;
+        return;
+      }
+    }
+  }
+  _bedPlacing();
+};
+
+// Sleep timer ticks during physics
+const _bedPhysics = updatePhysics;
+updatePhysics = function() {
+  if (window.sleeping) {
+    window.sleepTimer--;
+    if (window.sleepTimer <= 0) {
+      window.gameTime = 400;           // jump to early morning
+      window.sleeping = false;
+      P.hp     = Math.min(P.maxHp,     P.hp     + 6);
+      P.hunger = Math.min(P.maxHunger, P.hunger + 4);
+    }
+    return; // freeze player while sleeping
+  }
+  _bedPhysics();
+};
+
+// Draw sleeping overlay on top of everything
+const _bedHUD = drawHUD;
+drawHUD = function() {
+  _bedHUD();
+  if (!window.sleeping) return;
+  const fade = 1 - window.sleepTimer / 80;
+  ctx.fillStyle = `rgba(0,0,20,${0.3 + fade * 0.6})`;
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 24px monospace';
+  ctx.fillStyle = `rgba(180,180,220,${fade})`;
+  ctx.fillText('💤  Sleeping...', W/2, H/2);
+  ctx.textAlign = 'left';
+};
+
 
 // Override drawHotbar: draw pixel meat on top of any MEAT slot
 const _meatHotbar = drawHotbar;

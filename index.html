@@ -1,8 +1,9 @@
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>MiniCraft</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: monospace; }
-  canvas { display: block; cursor: crosshair; }
+  canvas { display: block; cursor: crosshair; touch-action: none; }
   canvas.title-mode { cursor: default; }
 </style>
 
@@ -2348,6 +2349,171 @@ drawHUD = function() {
 };
 
 
+// ══════════════════════════════════════════════════════
+// MOBILE / TOUCH SUPPORT
+// ══════════════════════════════════════════════════════
+;(function() {
+  const BSZ = 64, GAP = 8;
+  const hotbarTop = H - 52;
+  const jumpY = rowY - BSZ - 6;
+
+  const VB = {
+    left:  { x: 12,                  y: rowY,  w: BSZ, h: BSZ, lbl: '◀' },
+    right: { x: 12 + BSZ + GAP,      y: rowY,  w: BSZ, h: BSZ, lbl: '▶' },
+    jump:  { x: 12 + (BSZ + GAP)/2,  y: jumpY, w: BSZ, h: BSZ, lbl: '▲' },
+    mine:  { x: W - BSZ - 12,        y: rowY,  w: BSZ, h: BSZ, lbl: '⛏' },
+    place: { x: W - 2*BSZ - GAP - 12, y: rowY, w: BSZ, h: BSZ, lbl: '🧱' },
+  };
+
+  window._hasTouched = false;
+  window._vPressed   = {};
+  const touchMap     = {};
+
+  function hitVBtn(tx, ty) {
+    for (const [k, b] of Object.entries(VB))
+      if (tx >= b.x && tx < b.x+b.w && ty >= b.y && ty < b.y+b.h) return k;
+    return null;
+  }
+
+  function syncToInputs() {
+    keys['ArrowLeft']  = !!window._vPressed.left;
+    keys['ArrowRight'] = !!window._vPressed.right;
+    const worldActive = Object.values(touchMap).some(v => v === 'world');
+    lmb = !!(window._vPressed.mine || (worldActive && !window.showInventory));
+    rmb = !!window._vPressed.place;
+  }
+
+  // Inventory slot interaction called directly from touch (e.preventDefault blocks synthetic mouse events)
+  function doInvTouch(tx, ty) {
+    // ⋮ button: close inventory
+    if (tx >= W-50 && tx <= W-10 && ty >= 10 && ty <= 50) {
+      if (window.heldItem && window.heldItem.id > 0) {
+        const all = [...hotbar, ...window.inventory];
+        for (const s of all) {
+          if (s.id === window.heldItem.id && s.n < 64) {
+            const add = Math.min(64 - s.n, window.heldItem.n);
+            s.n += add; window.heldItem.n -= add;
+            if (window.heldItem.n <= 0) { window.heldItem = { id:0, n:0 }; break; }
+          }
+        }
+        if (window.heldItem.n > 0) {
+          for (const s of all) {
+            if (!s.id || s.id === 0) { s.id = window.heldItem.id; s.n = window.heldItem.n; break; }
+          }
+          window.heldItem = { id:0, n:0 };
+        }
+      }
+      window.showInventory = false;
+      return;
+    }
+    const hit = getInventorySlotAt(tx, ty);
+    if (!hit) return;
+    const item = hit.arr[hit.idx];
+    if (!window.heldItem || window.heldItem.id === 0) {
+      if (item.id > 0) { window.heldItem = { id: item.id, n: item.n }; item.id = 0; item.n = 0; }
+    } else if (item.id === 0) {
+      item.id = window.heldItem.id; item.n = window.heldItem.n; window.heldItem = { id:0, n:0 };
+    } else if (item.id === window.heldItem.id) {
+      const add = Math.min(64 - item.n, window.heldItem.n);
+      item.n += add; window.heldItem.n -= add;
+      if (window.heldItem.n <= 0) window.heldItem = { id:0, n:0 };
+    } else {
+      const tmp = { id: item.id, n: item.n };
+      item.id = window.heldItem.id; item.n = window.heldItem.n; window.heldItem = tmp;
+    }
+  }
+
+  canvas.addEventListener('touchstart', function(e) {
+    e.preventDefault();
+    window._hasTouched = true;
+    for (const t of e.changedTouches) {
+      const r  = canvas.getBoundingClientRect();
+      const tx = t.clientX - r.left, ty = t.clientY - r.top;
+
+      if (window.showInventory) { doInvTouch(tx, ty); continue; }
+
+      const btn = hitVBtn(tx, ty);
+      if (btn) {
+        touchMap[t.identifier] = btn;
+        window._vPressed[btn]  = true;
+        if (btn === 'jump') { keys[' '] = true; setTimeout(function(){ keys[' '] = false; }, 120); }
+      } else {
+        // Hotbar slot tap → select slot
+        const sz = 44, pad = 3;
+        const sx0 = (W - 9*(sz+pad)) / 2, sy0 = H - sz - 8;
+        if (ty >= sy0 && ty < sy0 + sz) {
+          const i = Math.floor((tx - sx0) / (sz + pad));
+          if (i >= 0 && i < 9) { selSlot = i; continue; }
+        }
+        // World touch → aim + mine
+        touchMap[t.identifier] = 'world';
+        mx = tx; my = ty;
+      }
+    }
+    syncToInputs();
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', function(e) {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (touchMap[t.identifier] === 'world') {
+        const r = canvas.getBoundingClientRect();
+        mx = t.clientX - r.left;
+        my = t.clientY - r.top;
+      }
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', function(e) {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      const role = touchMap[t.identifier];
+      if (role && role !== 'world') window._vPressed[role] = false;
+      delete touchMap[t.identifier];
+    }
+    syncToInputs();
+  }, { passive: false });
+
+  canvas.addEventListener('touchcancel', function(e) {
+    for (const t of e.changedTouches) {
+      const role = touchMap[t.identifier];
+      if (role && role !== 'world') window._vPressed[role] = false;
+      delete touchMap[t.identifier];
+    }
+    syncToInputs();
+  }, { passive: false });
+
+  // Draw virtual buttons layered on top of HUD
+  const _mobileHUD = drawHUD;
+  drawHUD = function() {
+    _mobileHUD();
+    if (gameState !== 'playing' || window.showInventory || !window._hasTouched) return;
+    ctx.save();
+    ctx.textAlign = 'center';
+    for (const [name, b] of Object.entries(VB)) {
+      const active = !!window._vPressed[name];
+      ctx.globalAlpha = active ? 0.82 : 0.42;
+      ctx.fillStyle = active ? '#ffffff' : '#cccccc';
+      const rr = 14;
+      ctx.beginPath();
+      ctx.moveTo(b.x + rr, b.y);
+      ctx.arcTo(b.x + b.w, b.y,     b.x + b.w, b.y + b.h, rr);
+      ctx.arcTo(b.x + b.w, b.y + b.h, b.x,     b.y + b.h, rr);
+      ctx.arcTo(b.x,       b.y + b.h, b.x,     b.y,       rr);
+      ctx.arcTo(b.x,       b.y,       b.x + b.w, b.y,     rr);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = active ? 1.0 : 0.85;
+      ctx.fillStyle = '#111111';
+      ctx.font = 'bold 26px monospace';
+      ctx.fillText(b.lbl, b.x + b.w / 2, b.y + b.h / 2 + 10);
+    }
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'left';
+    ctx.restore();
+  };
+})();
+
 // Override drawHotbar: draw pixel meat on top of any MEAT slot
 const _meatHotbar = drawHotbar;
 drawHotbar = function() {
@@ -2366,5 +2532,148 @@ drawHotbar = function() {
     ctx.fillText(hotbar[i].n, sx + sz - 15, sy0 + sz - 4);
   }
 };
+
+// ══════════════════════════════════════════════════════
+// INVENTORY INTERACTION (click-to-move items)
+// ══════════════════════════════════════════════════════
+window.heldItem = { id: 0, n: 0 };
+
+function getInventorySlotAt(cx, cy) {
+  const slotSize = 36;
+  // Inventory grid (3 rows × 9 cols)
+  const xStart = W / 2 - 188;
+  const yStart = H / 2 - 80;
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 9; col++) {
+      const slotX = xStart + col * (slotSize + 6);
+      const slotY = yStart + row * (slotSize + 5);
+      if (cx >= slotX && cx < slotX + slotSize && cy >= slotY && cy < slotY + slotSize) {
+        return { arr: window.inventory, idx: row * 9 + col };
+      }
+    }
+  }
+  // Hotbar row (only interact with it while inventory is open)
+  const sz = 44, pad = 3;
+  const sx0 = (W - 9 * (sz + pad)) / 2;
+  const sy0 = H - sz - 8;
+  for (let i = 0; i < 9; i++) {
+    const slotX = sx0 + i * (sz + pad);
+    if (cx >= slotX && cx < slotX + sz && cy >= sy0 && cy < sy0 + sz) {
+      return { arr: hotbar, idx: i };
+    }
+  }
+  return null;
+}
+
+canvas.addEventListener('mousedown', function(e) {
+  if (!window.showInventory) return;
+  const r = canvas.getBoundingClientRect();
+  const cx = e.clientX - r.left;
+  const cy = e.clientY - r.top;
+  const hit = getInventorySlotAt(cx, cy);
+  if (!hit) return;
+  e.stopPropagation();
+
+  const item = hit.arr[hit.idx];
+
+  if (e.button === 0) {
+    // Left click: pick up full stack / place / merge / swap
+    if (window.heldItem.id === 0) {
+      if (item.id > 0) {
+        window.heldItem = { id: item.id, n: item.n };
+        item.id = 0; item.n = 0;
+      }
+    } else {
+      if (item.id === 0) {
+        item.id = window.heldItem.id; item.n = window.heldItem.n;
+        window.heldItem = { id: 0, n: 0 };
+      } else if (item.id === window.heldItem.id) {
+        const space = 64 - item.n;
+        const add = Math.min(space, window.heldItem.n);
+        item.n += add;
+        window.heldItem.n -= add;
+        if (window.heldItem.n <= 0) window.heldItem = { id: 0, n: 0 };
+      } else {
+        const tmp = { id: item.id, n: item.n };
+        item.id = window.heldItem.id; item.n = window.heldItem.n;
+        window.heldItem = tmp;
+      }
+    }
+  } else if (e.button === 2) {
+    // Right click: pick up half / place 1
+    if (window.heldItem.id === 0) {
+      if (item.id > 0) {
+        const half = Math.ceil(item.n / 2);
+        window.heldItem = { id: item.id, n: half };
+        item.n -= half;
+        if (item.n <= 0) { item.id = 0; item.n = 0; }
+      }
+    } else {
+      if (item.id === 0 || item.id === window.heldItem.id) {
+        if (item.n < 64) {
+          if (item.id === 0) item.id = window.heldItem.id;
+          item.n++;
+          window.heldItem.n--;
+          if (window.heldItem.n <= 0) window.heldItem = { id: 0, n: 0 };
+        }
+      }
+    }
+  }
+});
+
+// Draw held item following the cursor
+const _invHUD = drawHUD;
+drawHUD = function() {
+  _invHUD();
+  if (!window.showInventory || window.heldItem.id === 0) return;
+  const sz = 32;
+  const hx = mx - sz / 2, hy = my - sz / 2;
+  ctx.fillStyle = C_TOP[window.heldItem.id] || '#888';
+  ctx.fillRect(hx, hy, sz, sz);
+  ctx.fillStyle = C_DARK[window.heldItem.id] || '#555';
+  ctx.fillRect(hx, hy + sz - 6, sz, 6);
+  ctx.fillRect(hx + sz - 6, hy, 6, sz - 6);
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5;
+  ctx.strokeRect(hx, hy, sz, sz);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText(window.heldItem.n, hx + sz - 14, hy + sz - 3);
+};
+
+// I key: toggle inventory  |  Escape: close and return held item
+window.addEventListener('keydown', function(e) {
+  const toggleOpen = e.key === 'i' || e.key === 'I';
+  const forceClose = e.key === 'Escape';
+  if (!toggleOpen && !forceClose) return;
+  if (!window.showInventory && !toggleOpen) return;
+
+  // Return held item to any free slot
+  if (window.heldItem.id > 0) {
+    const all = [...hotbar, ...window.inventory];
+    for (const s of all) {
+      if (s.id === window.heldItem.id && s.n < 64) {
+        const add = Math.min(64 - s.n, window.heldItem.n);
+        s.n += add; window.heldItem.n -= add;
+        if (window.heldItem.n <= 0) { window.heldItem = { id: 0, n: 0 }; break; }
+      }
+    }
+    if (window.heldItem.n > 0) {
+      for (const s of all) {
+        if (!s.id || s.id === 0) {
+          s.id = window.heldItem.id; s.n = window.heldItem.n;
+          window.heldItem = { id: 0, n: 0 }; break;
+        }
+      }
+    }
+    window.heldItem = { id: 0, n: 0 };
+  }
+
+  if (toggleOpen) {
+    window.showInventory = !window.showInventory;
+  } else {
+    window.showInventory = false;
+  }
+  e.preventDefault();
+});
 
 </script>
